@@ -3,7 +3,8 @@ import type { NodeStatus, EdgeType } from "@/lib/graph/types";
 import { cn } from "@/lib/utils";
 
 const statuses: NodeStatus[] = ["SAFE", "BLOCKED", "DEADLOCKED"];
-const edges: EdgeType[] = ["TOUCHES", "BLOCKS", "CRITICAL_BLOCK"];
+const edges: EdgeType[] = ["TOUCHES", "CO_LOCATED", "BLOCKS", "CRITICAL_BLOCK"];
+const dashed = new Set<EdgeType>(["TOUCHES", "CO_LOCATED"]);
 
 /** Floating legend explaining node statuses and edge severities. */
 export function GraphLegend() {
@@ -26,8 +27,12 @@ export function GraphLegend() {
         {edges.map((e) => (
           <li key={e} className="flex items-center gap-2">
             <span
-              className="inline-block h-0.5 w-5 rounded"
-              style={{ backgroundColor: edgeColor[e] }}
+              className="inline-block w-5"
+              style={{
+                borderTopWidth: e === "CRITICAL_BLOCK" ? 3 : 2,
+                borderTopColor: edgeColor[e],
+                borderTopStyle: dashed.has(e) ? "dashed" : "solid",
+              }}
               aria-hidden
             />
             <span className="capitalize">{edgeLabel[e]}</span>

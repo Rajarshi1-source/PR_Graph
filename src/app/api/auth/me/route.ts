@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { requireSession } from "@/lib/auth/requireSession";
 import { prisma } from "@/lib/db/prisma";
 import { problem } from "@/lib/http/problem";
 
@@ -7,8 +7,8 @@ export const runtime = "nodejs";
 
 /** Current user + their installations/repos. */
 export async function GET(req: NextRequest) {
-  const session = getSession(req);
-  if (!session) return problem(401, "Not authenticated");
+  const { session, error } = requireSession(req);
+  if (error) return error;
 
   const user = await prisma.user.findUnique({
     where: { id: session.userId },

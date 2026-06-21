@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { GitPullRequest, Network } from "lucide-react";
+import { GitPullRequest, Network, Plus } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { getServerSession } from "@/lib/auth/serverSession";
 import { prisma } from "@/lib/db/prisma";
+import { env } from "@/lib/env";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -19,6 +21,10 @@ export default async function DashboardPage() {
     orderBy: { createdAt: "desc" },
   });
 
+  const installUrl = env.GITHUB_APP_SLUG
+    ? `https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new`
+    : null;
+
   return (
     <>
       <SiteHeader showAuth />
@@ -30,6 +36,11 @@ export default async function DashboardPage() {
               Signed in as {session.login}
             </p>
           </div>
+          {installUrl && (
+            <Button render={<a href={installUrl} />}>
+              <Plus className="size-4" /> Add repositories
+            </Button>
+          )}
         </div>
 
         {repos.length === 0 ? (
@@ -40,6 +51,11 @@ export default async function DashboardPage() {
               Install the PRGraph GitHub App on a repository to start visualizing its
               pull-request dependencies.
             </p>
+            {installUrl && (
+              <Button render={<a href={installUrl} />} className="mt-1">
+                <Plus className="size-4" /> Install GitHub App
+              </Button>
+            )}
           </Card>
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

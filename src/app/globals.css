@@ -45,6 +45,9 @@
   --color-status-blocked-foreground: var(--status-blocked-foreground);
   --color-status-deadlocked: var(--status-deadlocked);
   --color-status-deadlocked-foreground: var(--status-deadlocked-foreground);
+  --color-status-safe-bg: var(--status-safe-bg);
+  --color-status-blocked-bg: var(--status-blocked-bg);
+  --color-status-deadlocked-bg: var(--status-deadlocked-bg);
   --color-edge-touches: var(--edge-touches);
   --color-edge-blocks: var(--edge-blocks);
   --color-edge-critical: var(--edge-critical);
@@ -98,6 +101,9 @@
   --status-blocked-foreground: oklch(0.22 0.03 75);
   --status-deadlocked: oklch(0.6 0.23 27);
   --status-deadlocked-foreground: oklch(0.99 0 0);
+  --status-safe-bg: oklch(0.7 0.16 152 / 12%);
+  --status-blocked-bg: oklch(0.76 0.15 75 / 14%);
+  --status-deadlocked-bg: oklch(0.6 0.23 27 / 12%);
   --edge-touches: oklch(0.6 0 0);
   --edge-blocks: oklch(0.7 0.16 75);
   --edge-critical: oklch(0.6 0.23 27);
@@ -143,6 +149,9 @@
   --status-blocked-foreground: oklch(0.2 0.03 80);
   --status-deadlocked: oklch(0.66 0.22 27);
   --status-deadlocked-foreground: oklch(0.99 0 0);
+  --status-safe-bg: oklch(0.74 0.16 152 / 18%);
+  --status-blocked-bg: oklch(0.82 0.15 80 / 20%);
+  --status-deadlocked-bg: oklch(0.66 0.22 27 / 18%);
   --edge-touches: oklch(0.7 0 0);
   --edge-blocks: oklch(0.8 0.15 80);
   --edge-critical: oklch(0.66 0.22 27);
@@ -158,4 +167,18 @@
   html {
     @apply font-sans;
   }
+}
+
+/* Transient highlight when a PR node's status changes after a live recompute (§B.4 animation). */
+@keyframes prgraph-node-flash {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ring) 85%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 12px transparent;
+  }
+}
+.pr-node-flash {
+  animation: prgraph-node-flash 1.1s ease-out 2;
+  border-radius: 0.75rem;
 }

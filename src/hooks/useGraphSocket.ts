@@ -13,7 +13,8 @@ export interface GraphUpdate {
 
 /**
  * Subscribe to a repo's live graph updates (§B.4 WebSocket contract). Returns the latest
- * graph snapshot pushed by the server plus connection status. Seeds with `initial`.
+ * graph snapshot pushed by the server plus connection status. Seeds with `initial` and
+ * re-seeds whenever the active repo changes (so navigating A→B never shows A's graph).
  */
 export function useGraphSocket(
   repoId: number,
@@ -22,6 +23,16 @@ export function useGraphSocket(
   const [graph, setGraph] = useState<DependencyGraph | null>(initial);
   const [connected, setConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<GraphUpdate | null>(null);
+
+  // Re-seed when the repo changes (component stays mounted across client navigations, so the
+  // previous repo's graph would otherwise linger). Render-phase reset — the documented pattern
+  // for "adjust state when a prop changes", not a setState-in-effect.
+  const [seededRepo, setSeededRepo] = useState(repoId);
+  if (repoId !== seededRepo) {
+    setSeededRepo(repoId);
+    setGraph(initial);
+    setLastUpdate(null);
+  }
 
   useEffect(() => {
     const socket = getSocket();

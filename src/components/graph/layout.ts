@@ -5,14 +5,17 @@ import type { PRNodeData } from "@/lib/graph/types";
 const NODE_W = 280;
 const NODE_H = 132;
 
+export type LayoutDirection = "LR" | "TB";
+
 /**
- * Strategy pattern (plan §8.2): a layered left-to-right dagre layout that mirrors merge order.
- * Pure positioning — takes React Flow nodes/edges, returns nodes with computed positions.
+ * Strategy pattern (plan §8.2): a layered dagre layout that mirrors merge order. Defaults to a
+ * top-to-bottom hierarchy (frontend skill). Pure positioning — takes React Flow nodes/edges,
+ * returns nodes with computed positions.
  */
 export function layoutGraph(
   nodes: Node<PRNodeData>[],
   edges: Edge[],
-  direction: "LR" | "TB" = "LR",
+  direction: LayoutDirection = "TB",
 ): Node<PRNodeData>[] {
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: direction, nodesep: 48, ranksep: 96, marginx: 24, marginy: 24 });

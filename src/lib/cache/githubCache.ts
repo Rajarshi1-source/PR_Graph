@@ -10,6 +10,10 @@ const RATE_LIMIT_FLOOR = 500;
 const etagKey = (scope: string) => `gh:etag:${scope}`;
 const rateKey = (installId: number) => `gh:ratelimit:${installId}`;
 
+/** Cache-key helpers shared by the GitHub fetchers and the recompute service (single source). */
+export const prsCacheKey = (repoId: number) => `gh:prs:${repoId}`;
+export const filesCacheKey = (repoId: number, prNumber: number) => `gh:files:${repoId}:${prNumber}`;
+
 export async function getEtag(scope: string): Promise<string | null> {
   return redis.get(etagKey(scope));
 }

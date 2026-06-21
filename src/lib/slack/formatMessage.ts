@@ -53,7 +53,12 @@ export function buildUnblockedMessage(input: {
   }
 
   if (unblocked.length) {
-    const list = unblocked.map((c) => `• <#${c.prNumber}> ${c.title}`).join("\n");
+    const list = unblocked
+      .map(
+        (c) =>
+          `• <https://github.com/${fullName}/pull/${c.prNumber}|#${c.prNumber}> ${c.title}`,
+      )
+      .join("\n");
     builder.section(`🎉 *Now safe to merge:*\n${list}`);
   } else {
     builder.context("No PRs were unblocked by this change.");

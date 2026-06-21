@@ -15,6 +15,9 @@ export interface RawPR {
   updated_at: string;
   user: { login: string; avatar_url: string } | null;
   id: number;
+  draft?: boolean;
+  labels?: { name: string }[];
+  requested_reviewers?: { login: string }[] | null;
 }
 
 /** Minimal shape we read from `pulls.listFiles` (includes the unified-diff `patch`). */

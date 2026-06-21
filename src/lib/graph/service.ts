@@ -7,6 +7,9 @@ import { fetchPRFiles } from "@/lib/github/fetchPRFiles";
 import { toPRWithFiles } from "@/lib/github/mapToPR";
 import type { RepoRef, RawPR, RawPRFile } from "@/lib/github/types";
 import { getCachedGraph, setCachedGraph } from "@/lib/cache/graphCache";
+import { invalidate } from "@/lib/cache/decorators";
+import { prsCacheKey, filesCacheKey } from "@/lib/cache/githubCache";
+import { redis } from "@/lib/cache/redis";
 import { pushGraphUpdate } from "@/lib/websocket/server";
 import { notifyUnblocked } from "@/lib/slack/notifyUnblocked";
 import { graphRecomputes, recomputeDuration } from "@/lib/metrics";
@@ -34,6 +37,10 @@ export interface RecomputeResult {
 export async function recomputeGraph(input: {
   repoId: number;
   triggeredBy: string;
+  /** The PR number from the triggering webhook, so we re-fetch exactly its files fresh. */
+  changedPrNumber?: number;
+  /** Manual sync: bypass ALL GitHub fetch caches for a fully fresh recompute. */
+  forceFresh?: boolean;
 }): Promise<RecomputeResult | null> {
   const repo = await prisma.repository.findUnique({
     where: { id: input.repoId },
@@ -41,11 +48,37 @@ export async function recomputeGraph(input: {
   });
   if (!repo) return null;
 
-  const ref = toRepoRef(repo);
-  const t0 = Date.now();
+  // Serialize recomputes per repo (graph:lock) so concurrent webhooks don't interleave writes
+  // or double-notify. If another recompute holds the lock, skip — its result reflects latest state.
+  const lockKey = `graph:lock:${input.repoId}`;
+  const locked = await redis.set(lockKey, "1", "EX", 60, "NX");
+  if (locked === null) return null;
 
-  // 1. Fetch current open PRs + their files (cached).
+  try {
+    return await runRecompute(repo, input);
+  } finally {
+    await redis.del(lockKey);
+  }
+}
+
+async function runRecompute(
+  repo: { id: number; fullName: string; installation: { githubInstallId: number } },
+  input: { repoId: number; triggeredBy: string; changedPrNumber?: number; forceFresh?: boolean },
+): Promise<RecomputeResult | null> {
+  const ref = toRepoRef(repo);
+
+  // Invalidate GitHub fetch caches so the recompute reflects current state, not a 2-5 min stale
+  // snapshot (otherwise a merge/open isn't visible until the TTL expires). The PR list cache is
+  // always dropped (the set of open PRs may have changed); the changed PR's files cache too.
+  await invalidate(prsCacheKey(ref.id));
+  if (input.changedPrNumber) await invalidate(filesCacheKey(ref.id, input.changedPrNumber));
+
+  // 1. Fetch current open PRs + their files (fresh list above; per-PR files cached unless forced).
   const rawPRs = await fetchOpenPRs(ref);
+  if (input.forceFresh && rawPRs.length) {
+    await invalidate(...rawPRs.map((p) => filesCacheKey(ref.id, p.number)));
+  }
+
   const enriched = await Promise.all(
     rawPRs.map(async (raw) => {
       const files = await fetchPRFiles(ref, raw.number);
@@ -53,9 +86,11 @@ export async function recomputeGraph(input: {
     }),
   );
 
-  // 2. Build the graph (pure engine).
+  // 2. Build the graph (pure engine). Measure ONLY the engine (no GitHub I/O) so the SLO metric
+  // and stored compute time reflect graph computation, not network latency (plan §11 Panel 2).
+  const tEngine = Date.now();
   const graph = buildDependencyGraph(enriched.map((e) => e.pr));
-  const computeTimeMs = Date.now() - t0;
+  const computeTimeMs = Date.now() - tEngine;
   recomputeDuration.observe(computeTimeMs);
   graphRecomputes.inc({ trigger: input.triggeredBy.split(":")[0] });
 
@@ -104,6 +139,11 @@ async function persistGraph(
     for (const e of enriched) {
       const additions = e.files.reduce((s, f) => s + f.additions, 0);
       const deletions = e.files.reduce((s, f) => s + f.deletions, 0);
+      const metadata = {
+        draft: e.raw.draft ?? false,
+        labels: (e.raw.labels ?? []).map((l) => l.name),
+        reviewers: (e.raw.requested_reviewers ?? []).map((r) => r.login),
+      };
       const pr = await tx.pullRequest.upsert({
         where: { repoId_number: { repoId, number: e.raw.number } },
         create: {
@@ -119,6 +159,7 @@ async function persistGraph(
           deletions,
           prCreatedAt: new Date(e.raw.created_at),
           prUpdatedAt: new Date(e.raw.updated_at),
+          metadata,
         },
         update: {
           title: e.raw.title,
@@ -127,6 +168,7 @@ async function persistGraph(
           additions,
           deletions,
           prUpdatedAt: new Date(e.raw.updated_at),
+          metadata,
         },
       });
       numberToId.set(e.raw.number, pr.id);
@@ -140,6 +182,7 @@ async function persistGraph(
             status: f.status,
             additions: f.additions,
             deletions: f.deletions,
+            patch: f.patch ?? null,
           })),
         });
       }
@@ -196,6 +239,56 @@ export async function getGraphForRepo(
   });
   if (!repo) return null;
   return (await getCachedGraph(repoId)) ?? (await loadLatestSnapshotGraph(repoId));
+}
+
+export interface SnapshotSummary {
+  id: number;
+  totalPRs: number;
+  safePRs: number;
+  blockedPRs: number;
+  deadlockedPRs: number;
+  totalEdges: number;
+  triggeredBy: string;
+  computeTimeMs: number;
+  createdAt: Date;
+}
+
+/** Paginated snapshot history for a repo the user owns, or null if not owned. */
+export async function getGraphHistory(
+  repoId: number,
+  userId: number,
+  page: number,
+  perPage: number,
+): Promise<{ items: SnapshotSummary[]; page: number; perPage: number; total: number; hasNext: boolean } | null> {
+  const repo = await prisma.repository.findFirst({
+    where: { id: repoId, installation: { userId } },
+    select: { id: true },
+  });
+  if (!repo) return null;
+
+  const where = { repoId };
+  const [total, snaps] = await Promise.all([
+    prisma.graphSnapshot.count({ where }),
+    prisma.graphSnapshot.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * perPage,
+      take: perPage,
+      select: {
+        id: true,
+        totalPRs: true,
+        safePRs: true,
+        blockedPRs: true,
+        deadlockedPRs: true,
+        totalEdges: true,
+        triggeredBy: true,
+        computeTimeMs: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+
+  return { items: snaps, page, perPage, total, hasNext: page * perPage < total };
 }
 
 /** Server-component initial fetch by owner/name. Returns the graph + repoId, or null. */

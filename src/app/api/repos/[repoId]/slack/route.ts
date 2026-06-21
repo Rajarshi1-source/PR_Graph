@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { getSession } from "@/lib/auth/session";
+import { requireSession } from "@/lib/auth/requireSession";
+import { getRepoForUser } from "@/lib/repos/service";
 import { prisma } from "@/lib/db/prisma";
-import { problem } from "@/lib/http/problem";
+import { problem, problemFromZod } from "@/lib/http/problem";
 
 export const runtime = "nodejs";
 
@@ -18,13 +19,10 @@ const PatchBody = z.object({
 
 async function authorize(req: NextRequest, repoIdRaw: string) {
   const parsed = Params.safeParse({ repoId: repoIdRaw });
-  if (!parsed.success) return { error: problem(400, "Invalid repoId") as NextResponse };
-  const session = getSession(req);
-  if (!session) return { error: problem(401, "Not authenticated") as NextResponse };
-  const repo = await prisma.repository.findFirst({
-    where: { id: parsed.data.repoId, installation: { userId: session.userId } },
-    select: { id: true },
-  });
+  if (!parsed.success) return { error: problemFromZod(parsed.error, "Invalid repoId") };
+  const { session, error } = requireSession(req);
+  if (error) return { error };
+  const repo = await getRepoForUser(parsed.data.repoId, session.userId);
   if (!repo) return { error: problem(404, "Repo not connected") as NextResponse };
   return { repoId: repo.id };
 }
@@ -54,7 +52,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ repoId: s
   if ("error" in auth) return auth.error;
 
   const parsed = PatchBody.safeParse(await req.json().catch(() => ({})));
-  if (!parsed.success) return problem(422, "Invalid body");
+  if (!parsed.success) return problemFromZod(parsed.error);
 
   const existing = await prisma.slackConfig.findUnique({ where: { repoId: auth.repoId } });
   if (!existing) return problem(404, "Slack not connected for this repo");

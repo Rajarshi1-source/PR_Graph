@@ -1,0 +1,74 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "tags": ["prgraph"],
+  "title": "PRGraph Overview",
+  "uid": "prgraph-overview",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Webhooks received (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(prgraph_webhooks_received_total[5m])) by (event)", "legendFormat": "{{event}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Graph recomputes (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(prgraph_graph_recomputes_total[5m])) by (trigger)", "legendFormat": "{{trigger}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Recompute duration p95 (engine, ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(prgraph_recompute_duration_ms_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Webhook end-to-end latency p95 (ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(prgraph_webhook_e2e_latency_ms_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "GitHub quota remaining",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "prgraph_github_quota_remaining", "legendFormat": "install {{installation}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "DLQ depth",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "targets": [{ "expr": "prgraph_dlq_depth" }]
+    },
+    {
+      "id": 7,
+      "title": "Installations (lifecycle)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        { "expr": "sum(prgraph_installations_total) by (action)", "legendFormat": "{{action}}" }
+      ]
+    }
+  ]
+}

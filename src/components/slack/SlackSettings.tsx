@@ -1,66 +1,62 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  useSlackConfig,
+  useUpdateSlackConfig,
+  useDisconnectSlack,
+} from "@/hooks/useSlackConfig";
+import { ApiError } from "@/lib/api/client";
 
-interface SlackState {
-  connected: boolean;
-  channelId?: string;
-  channelName?: string;
-  isActive?: boolean;
-  notifyOnMerge?: boolean;
-  notifyOnUnblock?: boolean;
-}
+const ChannelForm = z.object({
+  channelId: z.string().min(1, "Channel ID is required"),
+  channelName: z.string().optional(),
+});
+type ChannelForm = z.infer<typeof ChannelForm>;
 
 export function SlackSettings({ repoId }: { repoId: number }) {
-  const [state, setState] = useState<SlackState | null>(null);
-  const [channelId, setChannelId] = useState("");
-  const [channelName, setChannelName] = useState("");
-  const [saving, setSaving] = useState(false);
+  const { data: state, isPending } = useSlackConfig(repoId);
+  const update = useUpdateSlackConfig(repoId);
+  const disconnect = useDisconnectSlack(repoId);
 
+  const form = useForm<ChannelForm>({
+    resolver: zodResolver(ChannelForm),
+    defaultValues: { channelId: "", channelName: "" },
+  });
+
+  // Sync the form with the loaded config (after the query resolves / repo changes).
   useEffect(() => {
-    fetch(`/api/repos/${repoId}/slack`)
-      .then((r) => r.json())
-      .then((s: SlackState) => {
-        setState(s);
-        setChannelId(s.channelId ?? "");
-        setChannelName(s.channelName ?? "");
-      })
-      .catch(() => setState({ connected: false }));
-  }, [repoId]);
-
-  async function patch(body: Partial<SlackState> & { channelId?: string; channelName?: string }) {
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/repos/${repoId}/slack`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error("Save failed");
-      const next = (await res.json()) as SlackState;
-      setState((prev) => ({ ...(prev ?? { connected: true }), ...next }));
-      toast.success("Slack settings saved");
-    } catch {
-      toast.error("Could not save Slack settings");
-    } finally {
-      setSaving(false);
+    if (state?.connected) {
+      form.reset({ channelId: state.channelId ?? "", channelName: state.channelName ?? "" });
     }
-  }
+  }, [state, form]);
 
-  async function disconnect() {
-    await fetch(`/api/repos/${repoId}/slack`, { method: "DELETE" });
-    setState({ connected: false });
-    toast.success("Slack disconnected");
-  }
+  const onError = (err: unknown) =>
+    toast.error(err instanceof ApiError ? err.message : "Could not save Slack settings");
 
-  if (state === null) return <Card className="p-6 text-sm">Loading…</Card>;
+  const saveChannel = form.handleSubmit((values) => {
+    update.mutate(
+      { channelId: values.channelId, channelName: values.channelName, isActive: true },
+      { onSuccess: () => toast.success("Slack settings saved"), onError },
+    );
+  });
 
-  if (!state.connected) {
+  const toggle = (patch: Parameters<typeof update.mutate>[0]) =>
+    update.mutate(patch, { onError });
+
+  if (isPending) return <Card className="p-6 text-sm">Loading…</Card>;
+
+  if (!state?.connected) {
     return (
       <Card className="gap-3 p-6">
         <h2 className="font-semibold">Slack notifications</h2>
@@ -78,57 +74,55 @@ export function SlackSettings({ repoId }: { repoId: number }) {
     <Card className="gap-4 p-6">
       <div className="flex items-center justify-between">
         <h2 className="font-semibold">Slack notifications</h2>
-        <Button variant="ghost" size="sm" onClick={disconnect}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            disconnect.mutate(undefined, {
+              onSuccess: () => toast.success("Slack disconnected"),
+              onError,
+            })
+          }
+        >
           Disconnect
         </Button>
       </div>
 
-      <div className="grid gap-2 text-sm">
-        <label className="font-medium" htmlFor="channelId">
-          Channel ID
-        </label>
-        <input
-          id="channelId"
-          value={channelId}
-          onChange={(e) => setChannelId(e.target.value)}
-          placeholder="C0123456789"
-          className="border-input bg-background h-9 rounded-md border px-3"
-        />
-        <label className="font-medium" htmlFor="channelName">
-          Channel name (display only)
-        </label>
-        <input
+      <form onSubmit={saveChannel} className="grid gap-2">
+        <Label htmlFor="channelId">Channel ID</Label>
+        <Input id="channelId" placeholder="C0123456789" {...form.register("channelId")} />
+        {form.formState.errors.channelId && (
+          <p className="text-destructive text-xs">{form.formState.errors.channelId.message}</p>
+        )}
+
+        <Label htmlFor="channelName">Channel name (display only)</Label>
+        <Input
           id="channelName"
-          value={channelName}
-          onChange={(e) => setChannelName(e.target.value)}
           placeholder="#eng-pull-requests"
-          className="border-input bg-background h-9 rounded-md border px-3"
+          {...form.register("channelName")}
         />
-        <Button
-          className="mt-1 w-fit"
-          disabled={saving || !channelId}
-          onClick={() => patch({ channelId, channelName, isActive: true })}
-        >
+
+        <Button type="submit" className="mt-1 w-fit" disabled={update.isPending}>
           Save channel
         </Button>
-      </div>
+      </form>
 
       <Separator />
 
       <ToggleRow
         label="Notify when PRs become unblocked"
         checked={state.notifyOnUnblock ?? true}
-        onChange={(v) => patch({ notifyOnUnblock: v })}
+        onChange={(v) => toggle({ notifyOnUnblock: v })}
       />
       <ToggleRow
         label="Notify on merges"
         checked={state.notifyOnMerge ?? true}
-        onChange={(v) => patch({ notifyOnMerge: v })}
+        onChange={(v) => toggle({ notifyOnMerge: v })}
       />
       <ToggleRow
         label="Integration active"
         checked={state.isActive ?? false}
-        onChange={(v) => patch({ isActive: v })}
+        onChange={(v) => toggle({ isActive: v })}
       />
     </Card>
   );

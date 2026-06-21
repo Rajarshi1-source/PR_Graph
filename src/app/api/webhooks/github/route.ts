@@ -16,12 +16,23 @@ export async function POST(req: NextRequest) {
   const sig = req.headers.get("x-hub-signature-256") ?? "";
   if (!verifyGithubSignature(raw, sig)) return problem(401, "Bad signature");
 
-  const deliveryId = req.headers.get("x-github-delivery") ?? "";
+  // A delivery id is required for idempotent dedupe; reject deliveries without one.
+  const deliveryId = req.headers.get("x-github-delivery");
+  if (!deliveryId) return problem(400, "Missing X-GitHub-Delivery");
+
+  // Parse defensively — a malformed body must not throw a 500 (it's still signed, just unusable).
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return problem(400, "Malformed JSON payload");
+  }
+
   const first = await redis.set(`webhook:dedup:${deliveryId}`, "1", "EX", 300, "NX");
   if (first === null) return new Response(null, { status: 202 }); // duplicate → ack, skip
 
   const event = req.headers.get("x-github-event") ?? "";
   webhooksReceived.inc({ event });
-  await enqueueWebhook(event, JSON.parse(raw));
+  await enqueueWebhook(event, payload);
   return new Response(null, { status: 202 });
 }

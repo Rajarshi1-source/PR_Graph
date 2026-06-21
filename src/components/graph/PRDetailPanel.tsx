@@ -3,6 +3,7 @@
 import { ExternalLink } from "lucide-react";
 import type { DependencyGraph, PRNodeData } from "@/lib/graph/types";
 import { statusMeta } from "./statusMeta";
+import { ConflictFileList } from "./ConflictFileList";
 import { cn } from "@/lib/utils";
 import {
   Sheet,
@@ -52,14 +53,20 @@ export function PRDetailPanel({
                 <span className="text-status-deadlocked">−{node.deletions}</span>
               </div>
 
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium",
-                  statusMeta[node.status].chip,
-                )}
-              >
-                {statusMeta[node.status].label}
-              </span>
+              {(() => {
+                const Icon = statusMeta[node.status].icon;
+                return (
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium",
+                      statusMeta[node.status].chip,
+                    )}
+                  >
+                    <Icon className="size-3" aria-hidden />
+                    {statusMeta[node.status].label}
+                  </span>
+                );
+              })()}
 
               <Separator />
 
@@ -75,6 +82,11 @@ export function PRDetailPanel({
                 empty="Not blocking any PRs."
                 graph={graph}
               />
+
+              <div>
+                <p className="mb-1 font-medium">Conflicting files</p>
+                <ConflictFileList node={node} graph={graph} />
+              </div>
 
               <Button
                 className="w-full"

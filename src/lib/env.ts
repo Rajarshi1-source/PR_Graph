@@ -35,6 +35,8 @@ const Env = z.object({
   GITHUB_WEBHOOK_SECRET: req(z.string().min(16)),
   GITHUB_CLIENT_ID: req(z.string()),
   GITHUB_CLIENT_SECRET: req(z.string()),
+  // App slug (the URL handle, e.g. "prgraph") used to build the install link. Optional.
+  GITHUB_APP_SLUG: z.string().optional(),
 
   // Slack (optional integration).
   SLACK_CLIENT_ID: z.string().optional(),

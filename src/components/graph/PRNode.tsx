@@ -5,6 +5,7 @@ import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { GitPullRequest } from "lucide-react";
 import type { PRNodeData } from "@/lib/graph/types";
 import { statusMeta } from "./statusMeta";
+import { useNodeActivate } from "./activate";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
@@ -13,11 +14,18 @@ type PRFlowNode = Node<PRNodeData, "prNode">;
 function PRNodeImpl({ data, selected }: NodeProps<PRFlowNode>) {
   const meta = statusMeta[data.status];
   const Icon = meta.icon;
+  const activate = useNodeActivate();
 
   return (
     <div
       role="button"
       tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activate(data);
+        }
+      }}
       aria-label={`PR #${data.prNumber}: ${data.title}. Status: ${meta.label}. ${data.blockedBy.length} blocking, ${data.blocking.length} blocked.`}
       className={cn(
         "bg-card text-card-foreground w-[280px] rounded-xl border-l-4 border border-border shadow-sm transition-shadow",

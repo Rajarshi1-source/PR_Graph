@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { ZodError } from "zod";
 
 /**
  * RFC 9457 ProblemDetail — the single error shape for every Route Handler.
@@ -30,4 +31,17 @@ export function problem(
     { type: "about:blank", title: titleFor(status), status, detail, ...extra },
     { status, headers: { "content-type": "application/problem+json" } },
   );
+}
+
+/**
+ * 422 ProblemDetail from a Zod failure, with a field-level `errors[]` array
+ * (security-and-api.md §B.2 validation contract).
+ */
+export function problemFromZod(error: ZodError, detail = "Validation failed"): NextResponse {
+  const errors = error.issues.map((i) => ({
+    field: i.path.join(".") || "(root)",
+    message: i.message,
+    code: i.code,
+  }));
+  return problem(422, detail, { errors });
 }

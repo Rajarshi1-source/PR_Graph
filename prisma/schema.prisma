@@ -97,6 +97,7 @@ model PRFile {
   status      String // added | modified | removed | renamed
   additions   Int         @default(0)
   deletions   Int         @default(0)
+  patch       String? // unified-diff hunks (fed to the AI analyzer in Phase 2)
 
   @@index([prId])
   @@index([filename])
