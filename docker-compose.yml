@@ -1,0 +1,72 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      PORT: 3000
+      DATABASE_URL: postgresql://prgraph:prgraph@postgres:5432/prgraph?schema=public
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY (base64 32 bytes)}
+      GITHUB_APP_ID: ${GITHUB_APP_ID}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      AI_ENABLED: ${AI_ENABLED:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: prgraph
+      POSTGRES_PASSWORD: prgraph
+      POSTGRES_DB: prgraph
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prgraph"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["monitoring"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  pgdata:
+  redisdata:

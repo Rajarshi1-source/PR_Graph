@@ -1,0 +1,160 @@
+// PRGraph database schema (see plan §6.2). PostgreSQL: relational integrity for
+// users/installations/repos/PRs/files, a junction table for dependency edges, and
+// JSONB for flexible GitHub metadata + serialized graph snapshots.
+
+// Prisma 7: the connection URL lives in prisma.config.ts (for the CLI/Migrate) and the
+// app passes a driver adapter (PrismaPg) to the PrismaClient constructor. See lib/db/prisma.ts.
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// GitHub OAuth users
+model User {
+  id            Int            @id @default(autoincrement())
+  githubId      Int            @unique @map("github_id")
+  username      String
+  email         String?
+  avatarUrl     String?        @map("avatar_url")
+  accessToken   String         @map("access_token") // encrypted at rest
+  installations Installation[]
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+// GitHub App installations (per user per org/account)
+model Installation {
+  id              Int          @id @default(autoincrement())
+  userId          Int          @map("user_id")
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  githubInstallId Int          @unique @map("github_install_id")
+  accountLogin    String       @map("account_login")
+  accountType     String       @map("account_type") // "Organization" | "User"
+  repositories    Repository[]
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  @@map("installations")
+}
+
+// Connected repositories
+model Repository {
+  id             Int             @id @default(autoincrement())
+  installationId Int             @map("installation_id")
+  installation   Installation    @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  githubRepoId   Int             @map("github_repo_id")
+  fullName       String          @map("full_name") // "owner/repo"
+  defaultBranch  String          @default("main") @map("default_branch")
+  isActive       Boolean         @default(true) @map("is_active")
+  lastSyncAt     DateTime?       @map("last_sync_at")
+  pullRequests   PullRequest[]
+  graphSnapshots GraphSnapshot[]
+  slackConfig    SlackConfig?
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  @@unique([installationId, githubRepoId])
+  @@map("repositories")
+}
+
+// Open pull requests (cached from GitHub API)
+model PullRequest {
+  id             Int          @id @default(autoincrement())
+  repoId         Int          @map("repo_id")
+  repository     Repository   @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  githubPrId     Int          @map("github_pr_id")
+  number         Int
+  title          String
+  authorLogin    String       @map("author_login")
+  authorAvatar   String?      @map("author_avatar")
+  state          String       @default("open") // open | closed | merged
+  htmlUrl        String       @map("html_url")
+  additions      Int          @default(0)
+  deletions      Int          @default(0)
+  prCreatedAt    DateTime     @map("pr_created_at")
+  prUpdatedAt    DateTime     @map("pr_updated_at")
+  metadata       Json         @default("{}") // labels, reviewers, checks
+  files          PRFile[]
+  blockedByEdges Dependency[] @relation("blocked_pr")
+  blockingEdges  Dependency[] @relation("blocker_pr")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@unique([repoId, number])
+  @@index([repoId, state])
+  @@map("pull_requests")
+}
+
+// Files changed in each PR
+model PRFile {
+  id          Int         @id @default(autoincrement())
+  prId        Int         @map("pr_id")
+  pullRequest PullRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
+  filename    String
+  status      String // added | modified | removed | renamed
+  additions   Int         @default(0)
+  deletions   Int         @default(0)
+
+  @@index([prId])
+  @@index([filename])
+  @@map("pr_files")
+}
+
+// Computed dependency edges (junction table — the "graph")
+model Dependency {
+  id          Int         @id @default(autoincrement())
+  repoId      Int         @map("repo_id")
+  blockerPrId Int         @map("blocker_pr_id")
+  blockedPrId Int         @map("blocked_pr_id")
+  blockerPr   PullRequest @relation("blocker_pr", fields: [blockerPrId], references: [id], onDelete: Cascade)
+  blockedPr   PullRequest @relation("blocked_pr", fields: [blockedPrId], references: [id], onDelete: Cascade)
+  edgeType    String      @map("edge_type") // BLOCKS | TOUCHES | CRITICAL_BLOCK
+  sharedFiles String[]    @map("shared_files")
+  computedAt  DateTime    @default(now()) @map("computed_at")
+
+  @@unique([blockerPrId, blockedPrId])
+  @@index([repoId])
+  @@index([blockerPrId])
+  @@index([blockedPrId])
+  @@map("dependencies")
+}
+
+// Graph computation history (for change tracking + replay)
+model GraphSnapshot {
+  id            Int        @id @default(autoincrement())
+  repoId        Int        @map("repo_id")
+  repository    Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  totalPRs      Int        @map("total_prs")
+  safePRs       Int        @map("safe_prs")
+  blockedPRs    Int        @map("blocked_prs")
+  deadlockedPRs Int        @map("deadlocked_prs")
+  totalEdges    Int        @map("total_edges")
+  mergeOrder    Json       @map("merge_order")
+  triggeredBy   String     @map("triggered_by") // "webhook:pr_merged:42" | "manual_sync"
+  computeTimeMs Int        @map("compute_time_ms")
+  graphJson     Json       @map("graph_json")
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  @@index([repoId, createdAt(sort: Desc)])
+  @@map("graph_snapshots")
+}
+
+// Slack integration configuration per repo
+model SlackConfig {
+  id              Int        @id @default(autoincrement())
+  repoId          Int        @unique @map("repo_id")
+  repository      Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  teamId          String     @map("team_id")
+  channelId       String     @map("channel_id")
+  channelName     String     @map("channel_name")
+  botToken        String     @map("bot_token") // encrypted at rest
+  isActive        Boolean    @default(true) @map("is_active")
+  notifyOnMerge   Boolean    @default(true) @map("notify_on_merge")
+  notifyOnUnblock Boolean    @default(true) @map("notify_on_unblock")
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  @@map("slack_configs")
+}
