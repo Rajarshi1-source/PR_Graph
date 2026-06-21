@@ -1,0 +1,2 @@
+# Keeps the public/ directory in version control so the Docker build's `COPY /app/public` step
+# succeeds. Next.js serves static assets placed here at the site root.

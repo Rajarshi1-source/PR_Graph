@@ -7,7 +7,7 @@ import { z } from "zod";
 export const VerdictSchema = z.object({
   verdict: z.enum(["TRUE_CONFLICT", "CO_LOCATED", "UNCERTAIN"]),
   confidence: z.number().min(0).max(1),
-  explanation: z.string().max(600),
+  explanation: z.string().max(400),
 });
 
 export type ConflictVerdict = z.infer<typeof VerdictSchema>;

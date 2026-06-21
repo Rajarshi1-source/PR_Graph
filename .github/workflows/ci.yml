@@ -67,6 +67,52 @@ jobs:
       - run: npm run db:deploy
       - run: npm run test:integration
 
+  # AI eval — only does real work when an OpenAI key is configured (forks/PRs without the secret
+  # skip cleanly). Gates the model's accuracy (F1 >= 0.80 + no >5pt regression vs baseline) before
+  # the layer can be turned on in production. The offline `eval` above always runs (heuristic, F1 >= 0.60).
+  eval-ai:
+    runs-on: ubuntu-latest
+    needs: verify
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AI_ENABLED: "true"
+      LLM_PROVIDER: openai:gpt-5.4-mini
+      LLM_DAILY_BUDGET_USD: "1"
+      REDIS_URL: redis://localhost:6379
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Detect OpenAI key
+        id: guard
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "No OPENAI_API_KEY secret — skipping AI eval."
+          else
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.guard.outputs.has_key == 'true'
+        uses: actions/checkout@v4
+      - if: steps.guard.outputs.has_key == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - if: steps.guard.outputs.has_key == 'true'
+        run: npm ci
+      - if: steps.guard.outputs.has_key == 'true'
+        run: npx prisma generate
+      - if: steps.guard.outputs.has_key == 'true'
+        run: npm run eval:ci
+
   docker:
     runs-on: ubuntu-latest
     needs: verify

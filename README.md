@@ -8,8 +8,8 @@ PRs that touch the same files create dependency edges; a deterministic graph eng
 `BLOCKED`, or `DEADLOCKED`. GitHub webhooks recompute the graph in real time and push updates over
 WebSockets, and Slack gets notified when merging one PR unblocks others.
 
-> Status: MVP (Weeks 1–6). The AI semantic-conflict layer (Phase 2) is scaffolded behind a flag and
-> deferred — see [AI (Phase 2)](#ai-phase-2-deferred).
+> Status: MVP (Weeks 1–6) plus the AI semantic-conflict layer (Phase 2), wired into the live
+> recompute but **off by default** (`AI_ENABLED=false`) — see [AI (Phase 2)](#ai-phase-2--live-behind-a-flag).
 
 ## How it works
 
@@ -92,7 +92,9 @@ Create a GitHub App (Settings → Developer settings → GitHub Apps) with:
 | `npm test` | Vitest (graph engine suite) |
 | `npm run lint` / `typecheck` | ESLint / `tsc --noEmit` |
 | `npm run db:migrate` / `db:deploy` | Prisma migrate (dev / prod) |
-| `npm run eval` | AI semantic-conflict eval harness (Phase 2) |
+| `npm run eval` | AI semantic-conflict eval harness — grades the shipping analyzer |
+| `npm run eval:baseline` | Write `evals/baseline.json` from the current run |
+| `npm run eval:ci` | Eval in CI mode (fail on F1 below threshold or >5pt regression) |
 
 ## Docker
 
@@ -125,13 +127,36 @@ prisma/schema.prisma       Database schema
 .claude/skills/            Engineering rules (wired via AGENTS.md)
 ```
 
-## AI (Phase 2, deferred)
+## AI (Phase 2 — live behind a flag)
 
-`src/lib/ai` contains a provider-agnostic LLM adapter, a versioned prompt registry, a Zod-validated
-verdict schema, a content-addressed cache, and a **heuristic fallback** — wired but disabled
-(`AI_ENABLED=false`). When enabled it refines file-overlap edges into semantic conflict verdicts
-(`TRUE_CONFLICT` / `CO_LOCATED` / `UNCERTAIN`); on any failure it degrades to the deterministic
-engine. The eval harness (`evals/`) gates accuracy in CI before the layer is turned on.
+`src/lib/ai` is a provider-agnostic LLM adapter (`adapters/`), a versioned prompt registry, a
+Zod-validated verdict schema, a content-addressed cache, a daily-budget breaker, and a **heuristic
+fallback**. It is wired into the live graph recompute but **off by default** (`AI_ENABLED=false`).
+
+When enabled, after the deterministic engine builds the graph, each overlapping edge is sent to
+`analyzeOrFallback` (cache → adapter → Zod → heuristic) with bounded concurrency, using diffs
+derived from the PR patches **already fetched** (no extra GitHub calls). `refineGraph` then demotes
+`CO_LOCATED` edges to non-blocking and re-runs the topo sort, so AI can only ever soften
+`BLOCKED → SAFE` / break a deadlock — never break the graph. Any LLM error/timeout, or hitting the
+daily budget, degrades that edge to the deterministic verdict.
+
+How verdicts map to the graph:
+
+- `TRUE_CONFLICT` — edge stays blocking (deterministic severity preserved).
+- `CO_LOCATED` — edge demoted to non-blocking; downstream PRs can unblock.
+- `UNCERTAIN` — treated conservatively (stays blocking).
+
+### Enabling it
+
+1. Set `OPENAI_API_KEY` (and optionally `LLM_PROVIDER`, `LLM_DAILY_BUDGET_USD`).
+2. Validate accuracy on the labeled set:
+   ```bash
+   AI_ENABLED=true OPENAI_API_KEY=sk-... npm run eval     # expect F1 >= 0.80
+   npm run eval:baseline                                  # record the baseline
+   ```
+3. Flip `AI_ENABLED=true`. CI's secret-gated `eval-ai` job re-checks F1 >= 0.80 (and no >5pt
+   regression vs `evals/baseline.json`) on every push; the offline `eval` job always guards the
+   heuristic at F1 >= 0.60. Telemetry (`prgraph_llm_*`, `prgraph_ai_*`) feeds the Grafana AI row.
 
 ## License
 

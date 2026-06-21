@@ -67,3 +67,59 @@ export const dlqDepth = gauge({
   name: "prgraph_dlq_depth",
   help: "Number of entries in the webhook dead-letter queue",
 });
+
+// --- AI semantic-conflict layer (Phase 2 MLOps telemetry) -----------------------------------
+
+/** LLM call latency by provider. */
+export const llmLatency = histogram({
+  name: "prgraph_llm_latency_ms",
+  help: "LLM completion latency in ms",
+  labelNames: ["provider"],
+  buckets: [100, 250, 500, 1000, 2000, 5000, 10000, 30000],
+});
+
+/** Total LLM tokens consumed (prompt + completion) by provider. */
+export const llmTokens = counter({
+  name: "prgraph_llm_tokens_total",
+  help: "LLM tokens consumed (prompt + completion)",
+  labelNames: ["provider"],
+});
+
+/** Estimated LLM spend in USD by provider. */
+export const llmCostUsd = counter({
+  name: "prgraph_llm_cost_usd_total",
+  help: "Estimated LLM spend in USD",
+  labelNames: ["provider"],
+});
+
+/** Conflict-analysis requests (denominator for the cache-hit ratio). */
+export const aiRequests = counter({
+  name: "prgraph_ai_requests_total",
+  help: "Conflict-analysis requests",
+});
+
+/** Conflict-analysis cache hits (numerator for the cache-hit ratio). */
+export const aiCacheHits = counter({
+  name: "prgraph_ai_cache_hits_total",
+  help: "Conflict-analysis verdicts served from the content-addressed cache",
+});
+
+/** Degradations from AI to the deterministic heuristic. */
+export const aiFallbacks = counter({
+  name: "prgraph_ai_fallbacks_total",
+  help: "AI analysis degradations to the heuristic fallback",
+  labelNames: ["reason"],
+});
+
+/** Verdicts produced, labeled by verdict + source (cache | ai | heuristic). */
+export const aiVerdicts = counter({
+  name: "prgraph_ai_verdicts_total",
+  help: "Conflict verdicts produced",
+  labelNames: ["verdict", "source"],
+});
+
+/** Remaining daily LLM budget in USD (budget breaker visibility). */
+export const aiBudgetRemaining = gauge({
+  name: "prgraph_ai_budget_remaining_usd",
+  help: "Remaining LLM daily budget in USD",
+});

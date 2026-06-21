@@ -112,8 +112,11 @@ model Dependency {
   blockedPrId Int         @map("blocked_pr_id")
   blockerPr   PullRequest @relation("blocker_pr", fields: [blockerPrId], references: [id], onDelete: Cascade)
   blockedPr   PullRequest @relation("blocked_pr", fields: [blockedPrId], references: [id], onDelete: Cascade)
-  edgeType    String      @map("edge_type") // BLOCKS | TOUCHES | CRITICAL_BLOCK
+  edgeType    String      @map("edge_type") // BLOCKS | TOUCHES | CRITICAL_BLOCK | CO_LOCATED
   sharedFiles String[]    @map("shared_files")
+  // Phase-2 AI refinement (null when AI disabled): TRUE_CONFLICT | CO_LOCATED | UNCERTAIN.
+  semanticVerdict String? @map("semantic_verdict")
+  explanation     String? @db.Text
   computedAt  DateTime    @default(now()) @map("computed_at")
 
   @@unique([blockerPrId, blockedPrId])

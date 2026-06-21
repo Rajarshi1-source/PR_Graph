@@ -69,6 +69,66 @@
       "targets": [
         { "expr": "sum(prgraph_installations_total) by (action)", "legendFormat": "{{action}}" }
       ]
+    },
+    {
+      "id": 100,
+      "title": "AI — Semantic Conflict Layer",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 101,
+      "title": "LLM spend (USD/s rate) by provider",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 25 },
+      "targets": [
+        { "expr": "sum(rate(prgraph_llm_cost_usd_total[5m])) by (provider)", "legendFormat": "{{provider}}" }
+      ]
+    },
+    {
+      "id": 102,
+      "title": "AI budget remaining (USD)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 25 },
+      "targets": [{ "expr": "prgraph_ai_budget_remaining_usd" }]
+    },
+    {
+      "id": 103,
+      "title": "Cache-hit ratio",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 25 },
+      "targets": [
+        { "expr": "sum(rate(prgraph_ai_cache_hits_total[5m])) / clamp_min(sum(rate(prgraph_ai_requests_total[5m])), 1)", "legendFormat": "hit ratio" }
+      ]
+    },
+    {
+      "id": 104,
+      "title": "Verdicts (rate) by verdict + source",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 33 },
+      "targets": [
+        { "expr": "sum(rate(prgraph_ai_verdicts_total[5m])) by (verdict, source)", "legendFormat": "{{verdict}} / {{source}}" }
+      ]
+    },
+    {
+      "id": 105,
+      "title": "Fallbacks (rate) by reason",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 33 },
+      "targets": [
+        { "expr": "sum(rate(prgraph_ai_fallbacks_total[5m])) by (reason)", "legendFormat": "{{reason}}" }
+      ]
+    },
+    {
+      "id": 106,
+      "title": "LLM latency p95 (ms) by provider",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 33 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(prgraph_llm_latency_ms_bucket[5m])) by (le, provider))", "legendFormat": "{{provider}}" }
+      ]
     }
   ]
 }

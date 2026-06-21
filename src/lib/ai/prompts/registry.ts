@@ -1,15 +1,17 @@
 import type { ConflictInput } from "../types";
-import { PROMPT_VERSION, buildSystem, buildUser } from "./conflict.v3";
+import type { Prompt } from "../adapters/types";
+import { PROMPT_VERSION, buildSystem, buildUser, buildPrompt } from "./conflict.v3";
 
 export interface PromptTemplate {
   version: string;
   buildSystem: () => string;
   buildUser: (input: ConflictInput) => string;
+  buildPrompt: (input: ConflictInput) => Prompt;
 }
 
 /** Versioned prompt registry — add new versions here; the active one is content-key material. */
 const registry: Record<string, PromptTemplate> = {
-  [PROMPT_VERSION]: { version: PROMPT_VERSION, buildSystem, buildUser },
+  [PROMPT_VERSION]: { version: PROMPT_VERSION, buildSystem, buildUser, buildPrompt },
 };
 
 export const ACTIVE_PROMPT_VERSION = PROMPT_VERSION;

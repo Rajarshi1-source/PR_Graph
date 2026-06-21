@@ -1,11 +1,16 @@
 import { prisma } from "@/lib/db/prisma";
+import { env } from "@/lib/env";
 import { buildDependencyGraph } from "./buildDependencyGraph";
+import { refineGraph } from "./refineGraph";
 import { diffGraphs } from "./diffGraphs";
 import type { DependencyGraph, PRWithFiles } from "./types";
 import { fetchOpenPRs } from "@/lib/github/fetchPRs";
 import { fetchPRFiles } from "@/lib/github/fetchPRFiles";
 import { toPRWithFiles } from "@/lib/github/mapToPR";
+import { buildSharedDiff, mapWithConcurrency } from "@/lib/github/sharedDiffs";
 import type { RepoRef, RawPR, RawPRFile } from "@/lib/github/types";
+import { analyzeOrFallback } from "@/lib/ai/conflictAnalyzer";
+import type { ConflictVerdict } from "@/lib/ai/types";
 import { getCachedGraph, setCachedGraph } from "@/lib/cache/graphCache";
 import { invalidate } from "@/lib/cache/decorators";
 import { prsCacheKey, filesCacheKey } from "@/lib/cache/githubCache";
@@ -13,6 +18,9 @@ import { redis } from "@/lib/cache/redis";
 import { pushGraphUpdate } from "@/lib/websocket/server";
 import { notifyUnblocked } from "@/lib/slack/notifyUnblocked";
 import { graphRecomputes, recomputeDuration } from "@/lib/metrics";
+
+/** Max concurrent AI analyses per recompute — bounds LLM fan-out without flooding the provider. */
+const AI_CONCURRENCY = 4;
 
 /** Build a RepoRef from a DB Repository row (+ installation). */
 function toRepoRef(repo: {
@@ -89,10 +97,14 @@ async function runRecompute(
   // 2. Build the graph (pure engine). Measure ONLY the engine (no GitHub I/O) so the SLO metric
   // and stored compute time reflect graph computation, not network latency (plan §11 Panel 2).
   const tEngine = Date.now();
-  const graph = buildDependencyGraph(enriched.map((e) => e.pr));
+  const deterministic = buildDependencyGraph(enriched.map((e) => e.pr));
   const computeTimeMs = Date.now() - tEngine;
   recomputeDuration.observe(computeTimeMs);
   graphRecomputes.inc({ trigger: input.triggeredBy.split(":")[0] });
+
+  // 2b. Optional AI refinement (Phase 2). Disabled by default; on failure/budget it degrades to the
+  // deterministic graph edge-by-edge, so this can only ever soften BLOCKED → SAFE, never break.
+  const graph = await refineWithAI(deterministic, enriched);
 
   // 3. Diff against the previous snapshot.
   const prev = (await getCachedGraph(input.repoId)) ?? (await loadLatestSnapshotGraph(input.repoId));
@@ -107,6 +119,36 @@ async function runRecompute(
   await notifyUnblocked(input.repoId, repo.fullName, diff);
 
   return { graph, computeTimeMs };
+}
+
+/**
+ * Refine the deterministic graph with semantic verdicts when AI_ENABLED. Diffs come from the
+ * already-fetched in-memory PR patches (no extra GitHub calls). Each edge is analyzed with bounded
+ * concurrency via `analyzeOrFallback`, which never throws and respects the daily budget breaker.
+ */
+async function refineWithAI(graph: DependencyGraph, enriched: Enriched[]): Promise<DependencyGraph> {
+  if (!env.AI_ENABLED || graph.edges.length === 0) return graph;
+
+  const filesByNumber = new Map<number, PRWithFiles["files"]>(
+    enriched.map((e) => [e.pr.number, e.pr.files]),
+  );
+
+  const verdicts = new Map<string, ConflictVerdict>();
+  await mapWithConcurrency(graph.edges, AI_CONCURRENCY, async (edge) => {
+    const aFiles = filesByNumber.get(Number(edge.source));
+    const bFiles = filesByNumber.get(Number(edge.target));
+    if (!aFiles || !bFiles) return;
+    const verdict = await analyzeOrFallback({
+      prA: Number(edge.source),
+      prB: Number(edge.target),
+      sharedFiles: edge.sharedFiles,
+      diffA: buildSharedDiff(aFiles, edge.sharedFiles),
+      diffB: buildSharedDiff(bFiles, edge.sharedFiles),
+    });
+    verdicts.set(edge.id, verdict);
+  });
+
+  return refineGraph(graph, verdicts);
 }
 
 async function loadLatestSnapshotGraph(repoId: number): Promise<DependencyGraph | null> {
@@ -201,6 +243,8 @@ async function persistGraph(
           blockedPrId,
           edgeType: edge.type,
           sharedFiles: edge.sharedFiles,
+          semanticVerdict: edge.semanticVerdict ?? null,
+          explanation: edge.explanation ?? null,
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
