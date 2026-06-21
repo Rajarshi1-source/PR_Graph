@@ -260,20 +260,28 @@ httpServer.listen(3000);
 - **The custom server file is NOT processed by the Next.js compiler/bundler** (per the custom-server
   docs). It runs on Node directly, so it must be Node-runnable. This file is TypeScript and uses the
   `@/` path alias and top-level `await`, so run it with **`tsx`** (handles TS + ESM + tsconfig path
-  aliases) in dev, and precompile (tsc/tsup) or run with `tsx` in production.
+  aliases) in dev. For production, **bundle it to a single ESM file with esbuild** (`dist/server.mjs`)
+  and run `node dist/server.mjs` — this is what the §9.1 Dockerfile does, so the runtime image needs
+  no TS toolchain. (`tsx server/websocket.ts` also works in prod if you prefer to skip the bundle.)
 - **Scripts** for a custom-server app:
 
 ```jsonc
 // package.json — no --turbopack flag in Next.js 16; the custom server is launched directly
 {
   "scripts": {
-    "dev": "tsx watch server/websocket.ts",
-    "build": "next build",                        // Turbopack by default; PRGraph has no webpack config
-    "start": "NODE_ENV=production tsx server/websocket.ts",
-    "lint": "eslint ."                            // next lint was removed in 16
+    "dev": "tsx watch server/websocket.ts",       // Turbopack engaged via next({ dev:true })
+    "build": "next build",                         // → .next  (Turbopack default; no webpack config)
+    "build:server": "esbuild server/websocket.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=dist/server.mjs",
+    "start": "node dist/server.mjs",               // the compiled custom server, NOT .next/standalone
+    "lint": "eslint ."                             // next lint was removed in 16
   }
 }
 ```
+
+> `--packages=external` keeps `next`, `socket.io`, `@socket.io/redis-adapter`, `ioredis`, and
+> `@prisma/client` in `node_modules`; esbuild resolves the `@/` alias from `tsconfig.json` and inlines
+> only first-party code. ESM output is required for the top-level `await app.prepare()`. Keep `prisma`
+> in `dependencies` so `migrate deploy` runs offline in the image (see §9.1).
 
 The Redis adapter is what makes WebSocket delivery correct when you run more than one replica (§17 of
 the plan). The event contract (`graph:subscribe`, `graph:current`, `graph:updated`) is in
@@ -392,7 +400,7 @@ prgraph-graph-ai. Use `node:test` or Vitest — both fine on Node 24.
 - Webhook: verify HMAC on raw body → dedupe (`SET NX`) → `XADD` → 202 fast; recompute in the worker.
 - GitHub: `octokit.paginate`, ETags (304s are free), rate-limit governor in Redis.
 - Queue: Redis Streams + consumer group + DLQ; Socket.IO via custom server + Redis adapter.
-- Custom server: launched directly (Turbopack is default, no flag); run `server/websocket.ts` with `tsx`; `middleware.ts` → `proxy.ts`; `next lint` → `eslint`.
+- Custom server: launched directly (Turbopack is default, no flag); dev `tsx watch server/websocket.ts`, prod esbuild bundle → `node dist/server.mjs`; `middleware.ts` → `proxy.ts`; `next lint` → `eslint`.
 - Resilience: timeout + retry/backoff + opossum breaker + bulkhead + DLQ.
 - Secrets, auth, full REST/WS/webhook contract → `references/security-and-api.md`.
 - Graph + AI/LLM logic → prgraph-graph-ai; UI → prgraph-nextjs-frontend / prgraph-tailwind-shadcn.
