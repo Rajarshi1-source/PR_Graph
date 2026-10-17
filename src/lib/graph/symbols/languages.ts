@@ -7,8 +7,8 @@
 const ID = "([A-Za-z_$][\\w$]*)";
 
 const TS_JS: RegExp[] = [
-  new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?function\\s*\\*?\\s*${ID}`),
-  new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?class\\s+${ID}`),
+  new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?(?:declare\\s+)?(?:async\\s+)?function\\s*\\*?\\s*${ID}`),
+  new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?(?:declare\\s+)?(?:abstract\\s+)?class\\s+${ID}`),
   new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:const\\s+)?(?:interface|type|enum)\\s+${ID}`),
   new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${ID}\\s*(?::[^=]+)?=\\s*(?:async\\s*)?(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*(?::\\s*[^=]+)?=>`),
   new RegExp(`^\\s*export\\s+(?:const|let|var)\\s+${ID}`),
@@ -39,6 +39,7 @@ const RUST: RegExp[] = [
 const RUBY: RegExp[] = [
   /^\s*def\s+(?:self\.)?([A-Za-z_]\w*[?!]?)/,
   /^\s*(?:class|module)\s+([A-Z]\w*)/,
+  /^\s*alias(?:_method)?\s+:?([A-Za-z_]\w*[?!]?)/,
 ];
 
 const PHP: RegExp[] = [

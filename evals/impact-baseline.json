@@ -1,8 +1,29 @@
 {
-  "f1": 1,
-  "precision": 1,
-  "recall": 1,
-  "accuracy": 1,
-  "n": 22,
-  "generatedAt": "2026-10-17T13:58:11.944Z"
+  "sets": {
+    "synthetic": {
+      "f1": 1,
+      "precision": 1,
+      "recall": 1,
+      "accuracy": 1,
+      "n": 22,
+      "positives": 12
+    },
+    "real-dev": {
+      "f1": 0.8,
+      "precision": 0.6666666666666666,
+      "recall": 1,
+      "accuracy": 0.9032258064516129,
+      "n": 62,
+      "positives": 12
+    },
+    "real-holdout": {
+      "f1": 0.6956521739130435,
+      "precision": 0.5714285714285714,
+      "recall": 0.8888888888888888,
+      "accuracy": 0.8571428571428571,
+      "n": 49,
+      "positives": 9
+    }
+  },
+  "generatedAt": "2026-10-17T17:44:44.291Z"
 }
