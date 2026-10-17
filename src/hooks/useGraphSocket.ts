@@ -4,11 +4,14 @@ import { useEffect, useState } from "react";
 import { getSocket } from "@/lib/socket/client";
 import type { DependencyGraph } from "@/lib/graph/types";
 import type { GraphDiff } from "@/lib/graph/diffGraphs";
+import { normalizeGraph } from "@/lib/graph/normalize";
 
 export interface GraphUpdate {
   graph: DependencyGraph;
   diff: GraphDiff;
   syncedAt: string;
+  /** `recompute` (edges changed) or `readiness` (CI / review fast path). */
+  reason?: "recompute" | "readiness";
 }
 
 /**
@@ -42,10 +45,13 @@ export function useGraphSocket(
       socket.emit("graph:subscribe", String(repoId));
     };
     const onDisconnect = () => setConnected(false);
-    const onCurrent = (g: DependencyGraph) => setGraph(g);
+    // Normalize at the boundary — the server may still hold v1 snapshots.
+    const onCurrent = (g: unknown) => setGraph(normalizeGraph(g));
     const onUpdated = (update: GraphUpdate) => {
-      setGraph(update.graph);
-      setLastUpdate(update);
+      const g = normalizeGraph(update.graph);
+      if (!g) return;
+      setGraph(g);
+      setLastUpdate({ ...update, graph: g });
     };
 
     socket.on("connect", onConnect);

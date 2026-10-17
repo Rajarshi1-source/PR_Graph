@@ -27,5 +27,6 @@ export async function apiFetch<T>(
       .catch(() => undefined);
     throw new ApiError(res.status, detail ?? `Request failed (${res.status})`);
   }
+  if (res.status === 204) return schema.parse(null); // no body (e.g. DELETE)
   return schema.parse(await res.json());
 }

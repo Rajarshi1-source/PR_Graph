@@ -1,152 +1,282 @@
 import { describe, it, expect } from "vitest";
 import { buildDependencyGraph } from "../buildDependencyGraph";
 import { diffGraphs } from "../diffGraphs";
-import type { PRWithFiles } from "../types";
+import { normalizeGraph } from "../normalize";
+import { aggregateByWorkspace, workspaceOf } from "../workspaces";
+import { file, pr, replaceLine, insertBefore, hunk } from "../__fixtures__/prs";
 
-const pr = (number: number, createdAt: string, files: string[]): PRWithFiles => ({
-  number,
-  title: `PR ${number}`,
-  author: "a",
-  createdAt,
-  htmlUrl: `https://github.com/o/r/pull/${number}`,
-  files: files.map((f) => ({ filename: f, additions: 1, deletions: 0 })),
+const node = (g: ReturnType<typeof buildDependencyGraph>, id: number) => g.nodes.find((n) => n.id === String(id))!;
+const edge = (g: ReturnType<typeof buildDependencyGraph>, s: number, t: number) =>
+  g.edges.find((e) => e.source === String(s) && e.target === String(t));
+
+describe("buildDependencyGraph — line-level file edges", () => {
+  it("marks non-overlapping PRs SAFE with no edges", () => {
+    const g = buildDependencyGraph([pr(1, 1, [file("a.ts", replaceLine(3, "x"))]), pr(2, 2, [file("b.ts", replaceLine(3, "y"))])]);
+    expect(g.edges).toHaveLength(0);
+    expect(g.stats.safePRs).toBe(2);
+    expect(g.schemaVersion).toBe(2);
+  });
+
+  it("overlapping lines → exact BLOCKS from the earlier PR, with conflict regions", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("src/auth.ts", replaceLine(42, "return verify(t, opts);"))]),
+      pr(2, 2, [file("src/auth.ts", replaceLine(42, "return verify(t) ?? null;"))]),
+    ]);
+    const e = edge(g, 1, 2)!;
+    expect(e).toMatchObject({ type: "BLOCKS", blocking: true, certainty: "exact", evidence: "patch", severity: "medium" });
+    expect(e.conflicts![0]).toMatchObject({ file: "src/auth.ts", kind: "overlap" });
+    expect(e.conflicts![0].regions[0]).toMatchObject({ baseStart: 42, baseEnd: 42 });
+    expect(e.conflicts![0].regions[0].aPreview).toContain("+return verify(t, opts);");
+    expect(node(g, 1).data.status).toBe("SAFE");
+    expect(node(g, 2).data.status).toBe("BLOCKED");
+    expect(node(g, 2).data.blockedBy).toEqual(["1"]);
+  });
+
+  it("adjacent lines conflict too (git's rule)", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("a.ts", replaceLine(10, "x"))]),
+      pr(2, 2, [file("a.ts", replaceLine(11, "y"))]),
+    ]);
+    expect(edge(g, 1, 2)!.type).toBe("BLOCKS");
+  });
+
+  it("disjoint regions → non-blocking TOUCHES; the later PR is AT_RISK, not BLOCKED", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("a.ts", replaceLine(5, "top"))]),
+      pr(2, 2, [file("a.ts", insertBefore(200, "bottom"))]),
+    ]);
+    const e = edge(g, 1, 2)!;
+    expect(e).toMatchObject({ type: "TOUCHES", blocking: false, severity: "low" });
+    expect(node(g, 2).data.status).toBe("AT_RISK");
+    expect(node(g, 2).data.relatedTo).toEqual(["1"]);
+    expect(g.mergeOrder.levels[0].sort()).toEqual(["1", "2"]); // both mergeable now
+  });
+
+  it("missing patch (binary / huge) → BLOCKS with approximate certainty", () => {
+    const g = buildDependencyGraph([pr(1, 1, [file("logo.png")]), pr(2, 2, [file("logo.png")])]);
+    expect(edge(g, 1, 2)).toMatchObject({ type: "BLOCKS", blocking: true, certainty: "approx", evidence: "unknown" });
+  });
+
+  it("base-SHA drift keeps the line verdict but marks it approximate", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("a.ts", replaceLine(5, "x"))], { baseSha: "aaa" }),
+      pr(2, 2, [file("a.ts", replaceLine(90, "y"))], { baseSha: "bbb" }),
+    ]);
+    expect(edge(g, 1, 2)).toMatchObject({ type: "TOUCHES", certainty: "approx" });
+  });
+
+  it("severity scales with the number of conflicting files (critical at 3+)", () => {
+    const files = (t: string) => ["a.ts", "b.ts", "c.ts"].map((f) => file(f, replaceLine(1, t)));
+    const g = buildDependencyGraph([pr(1, 1, files("x")), pr(2, 2, files("y"))]);
+    expect(edge(g, 1, 2)!.severity).toBe("critical");
+  });
+
+  it("regenerable files (lockfiles) never block", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("package-lock.json", replaceLine(10, "a"))]),
+      pr(2, 2, [file("package-lock.json", replaceLine(10, "b"))]),
+    ]);
+    expect(edge(g, 1, 2)).toMatchObject({ type: "TOUCHES", blocking: false });
+    expect(edge(g, 1, 2)!.conflicts![0].kind).toBe("regenerable");
+  });
+
+  it("modify/delete is a blocking conflict; delete/delete is clean", () => {
+    const md = buildDependencyGraph([
+      pr(1, 1, [file("old.ts", replaceLine(1, "x"))]),
+      pr(2, 2, [file("old.ts", hunk(1, ["-gone"]), { status: "removed" })]),
+    ]);
+    expect(edge(md, 1, 2)!.blocking).toBe(true);
+    const dd = buildDependencyGraph([
+      pr(1, 1, [file("old.ts", hunk(1, ["-gone"]), { status: "removed" })]),
+      pr(2, 2, [file("old.ts", hunk(1, ["-gone"]), { status: "removed" })]),
+    ]);
+    expect(edge(dd, 1, 2)!.blocking).toBe(false);
+  });
+
+  it("produces Kahn levels over blocking edges for a chain", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("a.ts", replaceLine(1, "x"))]),
+      pr(2, 2, [file("a.ts", replaceLine(1, "y")), file("b.ts", replaceLine(1, "y"))]),
+      pr(3, 3, [file("b.ts", replaceLine(1, "z"))]),
+    ]);
+    expect(g.mergeOrder.levels).toEqual([["1"], ["2"], ["3"]]);
+  });
+
+  it("derives non-blocking INDIRECT edges for transitive blockers", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("a.ts", replaceLine(1, "x"))]),
+      pr(2, 2, [file("a.ts", replaceLine(1, "y")), file("b.ts", replaceLine(1, "y"))]),
+      pr(3, 3, [file("b.ts", replaceLine(1, "z"))]),
+    ]);
+    const ind = g.edges.find((e) => e.type === "INDIRECT")!;
+    expect(ind).toMatchObject({ source: "1", target: "3", blocking: false, via: ["2"] });
+    expect(node(g, 3).data.transitivelyBlockedBy).toEqual(["1"]);
+    expect(g.stats.totalDependencies).toBe(2); // INDIRECT edges are not counted
+  });
+
+  it("aggregates shared files and additions/deletions", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("x.ts", replaceLine(1, "a"), { additions: 5, deletions: 2 }), file("y.ts", replaceLine(9, "a"))]),
+      pr(2, 2, [file("x.ts", replaceLine(50, "b")), file("y.ts", replaceLine(90, "b"))]),
+    ]);
+    expect(edge(g, 1, 2)!.sharedFiles).toEqual(["x.ts", "y.ts"]);
+    expect(node(g, 1).data.additions).toBe(6);
+  });
+
+  it("is deterministic regardless of input order", () => {
+    const input = [
+      pr(1, 1, [file("a", replaceLine(1, "x")), file("b", replaceLine(4, "x"))]),
+      pr(2, 2, [file("b", replaceLine(4, "y")), file("c", replaceLine(1, "y"))]),
+      pr(3, 3, [file("c", replaceLine(30, "z"))]),
+    ];
+    expect(JSON.stringify(buildDependencyGraph(input))).toEqual(JSON.stringify(buildDependencyGraph([...input].reverse())));
+  });
 });
 
-describe("buildDependencyGraph", () => {
-  it("marks non-overlapping PRs SAFE with no edges", () => {
+describe("buildDependencyGraph — stacked and semantic edges", () => {
+  it("stacked PRs: parent → child even when the child is older", () => {
     const g = buildDependencyGraph([
-      pr(1, "2026-01-01", ["a.ts"]),
-      pr(2, "2026-01-02", ["b.ts"]),
+      pr(1, 5, [file("a.ts", replaceLine(1, "x"))], { headRef: "feat/base", baseRef: "main" }),
+      pr(2, 1, [file("b.ts", replaceLine(1, "y"))], { headRef: "feat/child", baseRef: "feat/base" }),
     ]);
-    expect(g.stats.safePRs).toBe(2);
+    expect(edge(g, 1, 2)).toMatchObject({ type: "STACKED", blocking: true, certainty: "exact" });
+    expect(node(g, 2).data.status).toBe("BLOCKED");
+  });
+
+  it("cross-file symbol impact: a rename used elsewhere → SEMANTIC definer → user", () => {
+    const g = buildDependencyGraph([
+      // #2 is OLDER but uses the symbol; #1 renames it later → edge must go 1 → 2.
+      pr(1, 5, [file("src/user.ts", hunk(10, ["-export function getUser(id: string) {", "+export function fetchUser(id: string) {"]))]),
+      pr(2, 1, [file("src/profile.ts", insertBefore(30, "  const u = getUser(session.id);"))]),
+    ]);
+    const e = edge(g, 1, 2)!;
+    expect(e).toMatchObject({ type: "SEMANTIC", blocking: true, certainty: "approx", severity: "high" });
+    expect(e.symbols).toEqual([{ name: "getUser", change: "renamed", defFile: "src/user.ts", refFile: "src/profile.ts" }]);
+    expect(edge(g, 2, 1)).toBeUndefined();
+  });
+
+  it("a body-only change to a definition creates no SEMANTIC edge", () => {
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("src/user.ts", hunk(12, ["-  return db.get(id);", "+  return db.get(id) ?? null;"], "export function getUser(id: string) {"))]),
+      pr(2, 2, [file("src/profile.ts", insertBefore(30, "  const u = getUser(session.id);"))]),
+    ]);
     expect(g.edges).toHaveLength(0);
   });
 
-  it("makes the earlier PR block the later one on a shared file", () => {
+  it("file overlap between a semantic pair merges into one edge (textual conflict wins the type)", () => {
     const g = buildDependencyGraph([
-      pr(1, "2026-01-01", ["a.ts"]),
-      pr(2, "2026-01-02", ["a.ts"]),
+      pr(1, 5, [
+        file("src/user.ts", hunk(10, ["-export function getUser(id: string) {", "+export function getUser(id: string, opts: Opts) {"])),
+        file("src/shared.ts", replaceLine(7, "a")),
+      ]),
+      pr(2, 1, [file("src/profile.ts", insertBefore(30, "getUser(x)")), file("src/shared.ts", replaceLine(7, "b"))]),
     ]);
-    const e = g.edges[0];
-    expect(e.source).toBe("1");
-    expect(e.target).toBe("2");
-    expect(g.nodes.find((n) => n.id === "1")!.data.status).toBe("SAFE");
-    expect(g.nodes.find((n) => n.id === "2")!.data.status).toBe("BLOCKED");
+    const pairEdges = g.edges.filter((e) => e.type !== "INDIRECT");
+    expect(pairEdges).toHaveLength(1);
+    expect(pairEdges[0]).toMatchObject({ source: "1", target: "2", type: "BLOCKS", certainty: "exact" });
+    expect(pairEdges[0].symbols?.[0].change).toBe("signature");
   });
 
-  it("classifies edges by overlap count (TOUCHES / BLOCKS / CRITICAL_BLOCK)", () => {
-    const touches = buildDependencyGraph([
-      pr(1, "2026-01-01", ["a"]),
-      pr(2, "2026-01-02", ["a"]),
-    ]);
-    expect(touches.edges[0].type).toBe("TOUCHES");
-
-    const blocks = buildDependencyGraph([
-      pr(1, "2026-01-01", ["a", "b"]),
-      pr(2, "2026-01-02", ["a", "b"]),
-    ]);
-    expect(blocks.edges[0].type).toBe("BLOCKS");
-
-    const critical = buildDependencyGraph([
-      pr(1, "2026-01-01", ["a", "b", "c"]),
-      pr(2, "2026-01-02", ["a", "b", "c"]),
-    ]);
-    expect(critical.edges[0].type).toBe("CRITICAL_BLOCK");
-  });
-
-  it("produces correct Kahn levels for a chain", () => {
+  it("mutual semantic dependencies are a real DEADLOCK", () => {
     const g = buildDependencyGraph([
-      pr(1, "2026-01-01", ["a"]),
-      pr(2, "2026-01-02", ["a", "b"]),
-      pr(3, "2026-01-03", ["b"]),
+      pr(1, 1, [
+        file("a.ts", hunk(1, ["-export function alpha() {", "+export function alphaV2() {"])),
+        file("c.ts", insertBefore(5, "beta();")),
+      ]),
+      pr(2, 2, [
+        file("b.ts", hunk(1, ["-export function beta() {", "+export function betaV2() {"])),
+        file("d.ts", insertBefore(5, "alpha();")),
+      ]),
     ]);
-    expect(g.mergeOrder.levels[0]).toContain("1");
-    expect(g.mergeOrder.totalLevels).toBeGreaterThanOrEqual(2);
+    expect(node(g, 1).data.status).toBe("DEADLOCKED");
+    expect(node(g, 2).data.status).toBe("DEADLOCKED");
+    expect(g.mergeOrder.inCycle.sort()).toEqual(["1", "2"]);
   });
 
-  it("aggregates shared files and additions/deletions onto edges and nodes", () => {
-    const a: PRWithFiles = {
-      number: 1,
-      title: "PR 1",
-      author: "a",
-      createdAt: "2026-01-01",
-      htmlUrl: "",
-      files: [
-        { filename: "x.ts", additions: 5, deletions: 2 },
-        { filename: "y.ts", additions: 1, deletions: 0 },
-      ],
-    };
-    const b: PRWithFiles = {
-      number: 2,
-      title: "PR 2",
-      author: "b",
-      createdAt: "2026-01-02",
-      htmlUrl: "",
-      files: [
-        { filename: "x.ts", additions: 3, deletions: 1 },
-        { filename: "y.ts", additions: 2, deletions: 2 },
-      ],
-    };
-    const g = buildDependencyGraph([a, b]);
-    expect(g.edges[0].sharedFiles.sort()).toEqual(["x.ts", "y.ts"]);
-    const n1 = g.nodes.find((n) => n.id === "1")!;
-    expect(n1.data.additions).toBe(6);
-    expect(n1.data.deletions).toBe(2);
+  it("convention-only file edges never fabricate a deadlock", () => {
+    // 1 →(semantic) 2, and 2 is older than 1 on a shared file: the file edge follows the hard order.
+    const g = buildDependencyGraph([
+      pr(1, 9, [file("x.ts", hunk(1, ["-export function f1() {", "+export function f1b() {"])), file("s.ts", replaceLine(3, "a"))]),
+      pr(2, 1, [file("y.ts", insertBefore(4, "f1();")), file("s.ts", replaceLine(40, "b"))]),
+    ]);
+    expect(g.cycles).toHaveLength(0);
   });
+});
 
-  it("marks a 2-cycle DEADLOCKED (created same day, both files shared cross-wise)", () => {
-    // Force a back edge: PR A created after B on one file, before B on another → cycle.
-    const a: PRWithFiles = {
-      number: 1,
-      title: "PR 1",
-      author: "a",
-      createdAt: "2026-01-02",
-      htmlUrl: "",
-      files: [{ filename: "shared.ts", additions: 1, deletions: 0 }],
-    };
-    const b: PRWithFiles = {
-      number: 2,
-      title: "PR 2",
-      author: "b",
-      createdAt: "2026-01-01",
-      htmlUrl: "",
-      files: [{ filename: "shared.ts", additions: 1, deletions: 0 }],
-    };
-    // Single shared file → single edge, no cycle. Sanity: this is just BLOCKED, not deadlocked.
-    const g = buildDependencyGraph([a, b]);
-    expect(g.cycles.flat()).toHaveLength(0);
-    expect(g.stats.deadlockedPRs).toBe(0);
-  });
+describe("workspaces", () => {
+  it("detects monorepo workspaces and aggregates the graph", () => {
+    expect(workspaceOf("apps/web/src/page.tsx")).toBe("apps/web");
+    expect(workspaceOf("packages/ui/button.tsx")).toBe("packages/ui");
+    expect(workspaceOf("src/index.ts")).toBe("src");
+    expect(workspaceOf("README.md")).toBe("(root)");
+    expect(workspaceOf("services/api/x.go", ["services/*"])).toBe("services/api");
 
-  it("is deterministic: identical input yields an identical graph", () => {
-    const input = [
-      pr(1, "2026-01-01", ["a", "b"]),
-      pr(2, "2026-01-02", ["b", "c"]),
-      pr(3, "2026-01-03", ["c"]),
-    ];
-    expect(JSON.stringify(buildDependencyGraph(input))).toEqual(
-      JSON.stringify(buildDependencyGraph(input)),
-    );
+    const g = buildDependencyGraph([
+      pr(1, 1, [file("packages/ui/button.tsx", replaceLine(3, "x"))]),
+      pr(2, 2, [file("packages/ui/button.tsx", replaceLine(3, "y")), file("apps/web/page.tsx", replaceLine(1, "y"))]),
+    ]);
+    expect(node(g, 2).data.workspaces).toEqual(["apps/web", "packages/ui"]);
+    const agg = aggregateByWorkspace(g);
+    expect(agg.nodes.map((n) => n.id)).toEqual(["apps/web", "packages/ui"]);
+    expect(agg.edges).toEqual([{ source: "packages/ui", target: "apps/web", blocking: 1, total: 1 }]);
   });
 });
 
 describe("diffGraphs", () => {
-  it("reports a PR becoming SAFE after its blocker is removed (merged)", () => {
+  it("reports a PR leaving BLOCKED after its blocker is merged", () => {
     const before = buildDependencyGraph([
-      pr(1, "2026-01-01", ["a"]),
-      pr(2, "2026-01-02", ["a"]),
+      pr(1, 1, [file("a.ts", replaceLine(1, "x"))]),
+      pr(2, 2, [file("a.ts", replaceLine(1, "y"))]),
     ]);
-    // PR #1 merged → only #2 remains, now SAFE.
-    const after = buildDependencyGraph([pr(2, "2026-01-02", ["a"])]);
+    const after = buildDependencyGraph([pr(2, 2, [file("a.ts", replaceLine(1, "y"))])]);
     const d = diffGraphs(before, after);
     expect(d.removed).toContain("1");
-    expect(d.newlyUnblocked.map((c) => c.id)).toContain("2");
+    expect(d.newlyUnblocked.map((c) => c.id)).toEqual(["2"]);
+  });
+
+  it("BLOCKED → AT_RISK counts as unblocked; AT_RISK → SAFE does not", () => {
+    const blocked = buildDependencyGraph([
+      pr(1, 1, [file("a.ts", replaceLine(1, "x"))]),
+      pr(2, 2, [file("a.ts", replaceLine(1, "y"))]),
+    ]);
+    const atRisk = buildDependencyGraph([
+      pr(1, 1, [file("a.ts", replaceLine(1, "x"))]),
+      pr(2, 2, [file("a.ts", replaceLine(80, "y"))]),
+    ]);
+    expect(diffGraphs(blocked, atRisk).newlyUnblocked.map((c) => c.to)).toEqual(["AT_RISK"]);
+    const safe = buildDependencyGraph([pr(2, 2, [file("a.ts", replaceLine(80, "y"))])]);
+    expect(diffGraphs(atRisk, safe).newlyUnblocked).toHaveLength(0);
   });
 
   it("treats a null previous snapshot as all-added", () => {
-    const g = buildDependencyGraph([pr(1, "2026-01-01", ["a"])]);
-    const d = diffGraphs(null, g);
-    expect(d.added).toEqual(["1"]);
-    expect(d.removed).toHaveLength(0);
+    const g = buildDependencyGraph([pr(1, 1, [file("a.ts", replaceLine(1, "x"))])]);
+    expect(diffGraphs(null, g)).toMatchObject({ added: ["1"], removed: [] });
+  });
+});
+
+describe("normalizeGraph", () => {
+  const v1 = {
+    nodes: [
+      { id: "1", type: "prNode", position: { x: 0, y: 0 }, data: { prNumber: 1, title: "a", status: "SAFE", blockedBy: [], blocking: ["2"] } },
+      { id: "2", type: "prNode", position: { x: 0, y: 0 }, data: { prNumber: 2, title: "b", status: "BLOCKED", blockedBy: ["1"], blocking: [] } },
+    ],
+    edges: [{ id: "1-2", source: "1", target: "2", type: "CRITICAL_BLOCK", sharedFiles: ["a", "b", "c"] }],
+    mergeOrder: { levels: [["1"], ["2"]], inCycle: [], totalLevels: 2 },
+    cycles: [],
+    stats: { totalPRs: 2, safePRs: 1, blockedPRs: 1, deadlockedPRs: 0, totalDependencies: 1 },
+  };
+
+  it("upgrades a v1 snapshot (CRITICAL_BLOCK → BLOCKS + critical, blocking derived)", () => {
+    const g = normalizeGraph(v1)!;
+    expect(g.schemaVersion).toBe(2);
+    expect(g.edges[0]).toMatchObject({ type: "BLOCKS", severity: "critical", blocking: true, certainty: "approx" });
+    expect(g.stats).toMatchObject({ atRiskPRs: 0, blockingDependencies: 1 });
+  });
+
+  it("is idempotent on v2 graphs and rejects non-graphs", () => {
+    const g = buildDependencyGraph([pr(1, 1, [file("a.ts", replaceLine(1, "x"))]), pr(2, 2, [file("a.ts", replaceLine(1, "y"))])]);
+    expect(normalizeGraph(g)).toEqual(g);
+    expect(normalizeGraph(null)).toBeNull();
+    expect(normalizeGraph({ foo: 1 })).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import "./shadcn-tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -45,12 +45,18 @@
   --color-status-blocked-foreground: var(--status-blocked-foreground);
   --color-status-deadlocked: var(--status-deadlocked);
   --color-status-deadlocked-foreground: var(--status-deadlocked-foreground);
+  --color-status-at-risk: var(--status-at-risk);
+  --color-status-at-risk-foreground: var(--status-at-risk-foreground);
   --color-status-safe-bg: var(--status-safe-bg);
+  --color-status-at-risk-bg: var(--status-at-risk-bg);
   --color-status-blocked-bg: var(--status-blocked-bg);
   --color-status-deadlocked-bg: var(--status-deadlocked-bg);
   --color-edge-touches: var(--edge-touches);
   --color-edge-blocks: var(--edge-blocks);
   --color-edge-critical: var(--edge-critical);
+  --color-edge-semantic: var(--edge-semantic);
+  --color-edge-stacked: var(--edge-stacked);
+  --color-edge-indirect: var(--edge-indirect);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -72,7 +78,7 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  --muted-foreground: oklch(0.5 0 0); /* darkened from shadcn 0.556 for 4.5:1 on --muted */
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -94,19 +100,26 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 
-  /* PRGraph status tokens (color-blind-safe hues; always paired with a label/icon) */
-  --status-safe: oklch(0.7 0.16 152);
+  /* PRGraph status tokens (green / yellow / red per the MVP spec + magenta for deadlocks;
+     color-blind-safe hues, always paired with a label + icon) */
+  --status-safe: oklch(0.5 0.14 152);
   --status-safe-foreground: oklch(0.99 0 0);
-  --status-blocked: oklch(0.76 0.15 75);
-  --status-blocked-foreground: oklch(0.22 0.03 75);
-  --status-deadlocked: oklch(0.6 0.23 27);
+  --status-at-risk: oklch(0.52 0.12 75);
+  --status-at-risk-foreground: oklch(0.22 0.04 85);
+  --status-blocked: oklch(0.5 0.2 30);
+  --status-blocked-foreground: oklch(0.99 0 0);
+  --status-deadlocked: oklch(0.48 0.22 335);
   --status-deadlocked-foreground: oklch(0.99 0 0);
-  --status-safe-bg: oklch(0.7 0.16 152 / 12%);
-  --status-blocked-bg: oklch(0.76 0.15 75 / 14%);
-  --status-deadlocked-bg: oklch(0.6 0.23 27 / 12%);
-  --edge-touches: oklch(0.6 0 0);
-  --edge-blocks: oklch(0.7 0.16 75);
-  --edge-critical: oklch(0.6 0.23 27);
+  --status-safe-bg: oklch(0.5 0.14 152 / 10%);
+  --status-at-risk-bg: oklch(0.8 0.15 90 / 18%);
+  --status-blocked-bg: oklch(0.5 0.2 30 / 10%);
+  --status-deadlocked-bg: oklch(0.48 0.22 335 / 10%);
+  --edge-touches: oklch(0.62 0 0);
+  --edge-blocks: oklch(0.6 0.19 35);
+  --edge-critical: oklch(0.52 0.22 27);
+  --edge-semantic: oklch(0.56 0.2 295);
+  --edge-stacked: oklch(0.58 0.15 250);
+  --edge-indirect: oklch(0.72 0 0);
 }
 
 .dark {
@@ -142,19 +155,25 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 
-  /* PRGraph status tokens — slightly brighter for dark surfaces */
+  /* PRGraph status tokens — brighter for dark surfaces */
   --status-safe: oklch(0.74 0.16 152);
   --status-safe-foreground: oklch(0.16 0.02 152);
-  --status-blocked: oklch(0.82 0.15 80);
-  --status-blocked-foreground: oklch(0.2 0.03 80);
-  --status-deadlocked: oklch(0.66 0.22 27);
-  --status-deadlocked-foreground: oklch(0.99 0 0);
+  --status-at-risk: oklch(0.84 0.15 92);
+  --status-at-risk-foreground: oklch(0.2 0.04 92);
+  --status-blocked: oklch(0.7 0.19 32);
+  --status-blocked-foreground: oklch(0.16 0.02 32);
+  --status-deadlocked: oklch(0.7 0.2 335);
+  --status-deadlocked-foreground: oklch(0.16 0.02 335);
   --status-safe-bg: oklch(0.74 0.16 152 / 18%);
-  --status-blocked-bg: oklch(0.82 0.15 80 / 20%);
-  --status-deadlocked-bg: oklch(0.66 0.22 27 / 18%);
+  --status-at-risk-bg: oklch(0.84 0.15 92 / 18%);
+  --status-blocked-bg: oklch(0.7 0.19 32 / 18%);
+  --status-deadlocked-bg: oklch(0.7 0.2 335 / 18%);
   --edge-touches: oklch(0.7 0 0);
-  --edge-blocks: oklch(0.8 0.15 80);
-  --edge-critical: oklch(0.66 0.22 27);
+  --edge-blocks: oklch(0.72 0.18 35);
+  --edge-critical: oklch(0.68 0.21 27);
+  --edge-semantic: oklch(0.72 0.17 295);
+  --edge-stacked: oklch(0.72 0.13 250);
+  --edge-indirect: oklch(0.55 0 0);
 }
 
 @layer base {

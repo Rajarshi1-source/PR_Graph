@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildPrompt, buildUser } from "@/lib/ai/prompts/conflict.v3";
-import { getPrompt, ACTIVE_PROMPT_VERSION } from "@/lib/ai/prompts/registry";
+import { getPrompt, ACTIVE_PROMPT_VERSION, promptVersions } from "@/lib/ai/prompts/registry";
 import { verdictKey } from "@/lib/ai/cache";
 import type { ConflictInput } from "@/lib/ai/types";
 
@@ -42,9 +42,25 @@ describe("conflict prompt wiring", () => {
       sharedFiles: ["src/b.ts", "src/a.ts"],
     });
     expect(k1).toBe(k2); // sorted internally
-    expect(k1).toMatch(/^ai:verdict:conflict\.v3:[0-9a-f]{64}$/); // full sha256
+    expect(k1.startsWith(`ai:verdict:${ACTIVE_PROMPT_VERSION}:`)).toBe(true);
+    expect(k1).toMatch(/:[0-9a-f]{64}$/); // full sha256
 
     const k3 = verdictKey(ACTIVE_PROMPT_VERSION, { ...input, diffA: "different" });
     expect(k3).not.toBe(k1);
+
+    const k4 = verdictKey(ACTIVE_PROMPT_VERSION, { ...input, focus: "src/a.ts lines 1-2" });
+    expect(k4).not.toBe(k1); // engine focus notes are part of the content address
+  });
+
+  it("v4 renders the engine focus notes and asks for a resolution", () => {
+    const tmpl = getPrompt("conflict.v4");
+    const p = tmpl.buildPrompt({ ...input, focus: "FOCUS_MARKER overlap in src/a.ts" });
+    expect(p.user).toContain("FOCUS_MARKER");
+    expect(p.system).toContain("resolution");
+  });
+
+  it("keeps v3 registered for side-by-side evaluation", () => {
+    expect(promptVersions()).toEqual(expect.arrayContaining(["conflict.v3", "conflict.v4"]));
+    expect(getPrompt("conflict.v3").version).toBe("conflict.v3");
   });
 });

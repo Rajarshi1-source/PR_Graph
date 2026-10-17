@@ -48,3 +48,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# standalone packages
+/packages/*/node_modules
+/packages/*/dist
+
+# playwright
+/playwright-report/
+/test-results/
+/blob-report/
+/playwright/.cache/

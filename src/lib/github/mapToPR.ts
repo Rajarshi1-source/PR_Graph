@@ -12,6 +12,11 @@ export function toPRWithFiles(pr: RawPR, files: RawPRFile[]): PRWithFiles {
     authorAvatar: pr.user?.avatar_url,
     createdAt: pr.created_at,
     htmlUrl: pr.html_url,
+    headSha: pr.head?.sha,
+    baseSha: pr.base?.sha,
+    headRef: pr.head?.ref,
+    baseRef: pr.base?.ref,
+    draft: pr.draft ?? false,
     files: files.map(
       (f): PRFile => ({
         filename: f.filename,
@@ -19,6 +24,7 @@ export function toPRWithFiles(pr: RawPR, files: RawPRFile[]): PRWithFiles {
         additions: f.additions,
         deletions: f.deletions,
         patch: f.patch,
+        ...(f.previous_filename ? { previousFilename: f.previous_filename } : {}),
       }),
     ),
   };

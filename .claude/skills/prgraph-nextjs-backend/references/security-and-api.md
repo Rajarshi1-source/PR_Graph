@@ -7,7 +7,8 @@ file carries the depth. All examples are TypeScript, Node 24, App Router Route H
 
 ## Contents
 - Part A — Security (A.1 GitHub auth models · A.2 user sessions · A.3 webhook HMAC · A.4 Slack ·
-  A.5 secrets/token encryption · A.6 rate limiting · A.7 CORS/CSRF · A.8 PII)
+  A.5 secrets/token encryption · A.6 rate limiting · A.7 CORS/CSRF · A.8 PII · A.9 API tokens ·
+  A.10 public demo surface)
 - Part B — API contract (B.1 REST endpoints · B.2 error shape · B.3 pagination/idempotency ·
   B.4 WebSocket events · B.5 webhook events)
 
@@ -32,6 +33,21 @@ App JWT (RS256, signed with GITHUB_APP_PRIVATE_KEY, exp <= 10 min)
    → POST /app/installations/{id}/access_tokens
    → installation token (1h)  → used for pulls.list / pulls.listFiles for that repo
 ```
+
+**GitHub App permissions (Phase 3).** Request the minimum; each one maps to a feature:
+
+| Permission | Level | Why |
+|---|---|---|
+| Pull requests | read | PR list, files + patches, reviews (readiness) |
+| Contents | read | `compareCommits` merge base + `getContent` blobs for diff3 deep verify |
+| Metadata | read | repo info + branch rules (`/rules/branches/{branch}`) |
+| Checks | **read & write** | read check runs for the CI overlay; write the `PRGraph` Check Run |
+| Commit statuses | read | legacy status contexts in the readiness rollup |
+| Actions | read | workflow names for failing-check reasons |
+
+Subscribe to events: `pull_request`, `pull_request_review`, `check_suite`, `check_run`, `status`
+(plus `installation`, `installation_repositories`, delivered automatically). PRGraph never writes
+code, comments, or reviews — the only write is its own Check Run, opt-in per repo.
 
 Never use a user token to read PR data for the graph — use the installation token. Installation
 tokens are short-lived, so they generally don't need encryption at rest; you mint them on demand.
@@ -119,6 +135,10 @@ export function open(sealed: string) {
   `gh:ratelimit:{installId}`; below 500, extend cache TTLs and defer non-critical syncs. Use ETags so
   unchanged data returns 304 (free).
 
+- **API tokens:** per-token fixed window (`rl:tok:{tokenId}:{epochMinute}`, 60/min) on
+  `/api/v1/**`; exceed → `429` ProblemDetail with `Retry-After`.
+- **Demo preflight:** per-IP window (30/min) on `POST /api/demo/preflight`.
+
 ### A.7 CORS / CSRF
 
 - The frontend and API are the **same Next origin** → no cross-origin CORS needed for first-party
@@ -133,6 +153,24 @@ export function open(sealed: string) {
   only "personal" data; don't store more than the graph needs. Honor repo disconnection by cascading
   deletes (the Prisma schema uses `onDelete: Cascade`). Don't index private-repo contents beyond what
   the installation grants.
+
+### A.9 API tokens (agent / CI access)
+
+- Format `prg_` + 32 base62 chars from `crypto.randomBytes`; returned **once** in the create response,
+  never retrievable again. Persist **only** `sha256(token)` (unique index) + the first 8 chars as a
+  display `prefix`. Lookup is by hash, so a timing attack learns nothing about stored tokens.
+- Scopes: `preflight:read`, `graph:read`. A token is bound to one repo and its creating user; it is
+  invalid once `revokedAt` is set, past `expiresAt`, or when the user loses access to the
+  installation. `lastUsedAt` is updated best-effort.
+- `Authorization: Bearer prg_…` only (never query strings — they end up in logs). Missing/invalid →
+  401; wrong scope or repo → 403. Token-authenticated routes are CSRF-exempt (no cookies involved).
+- Never log the token; log the `prefix` and token id.
+
+### A.10 Public demo surface
+
+`/demo` and `POST /api/demo/preflight` serve **static fixture data only** (no DB, Redis, GitHub, or
+user data) and are gated by `DEMO_ENABLED`. Validate and size-limit the preflight body (≤ 256 KB)
+exactly like the real endpoint; the handler is pure compute.
 
 ---
 
@@ -152,7 +190,17 @@ export function open(sealed: string) {
 | GET | `/api/repos/:repoId/graph` | session | current dependency graph |
 | GET | `/api/repos/:repoId/graph/history` | session | snapshot history |
 | GET | `/api/repos/:repoId/graph/merge-order` | session | Kahn levels |
-| GET | `/api/repos/:repoId/graph/stats` | session | counts (safe/blocked/deadlocked) |
+| GET | `/api/repos/:repoId/graph/stats` | session | counts (safe/at-risk/blocked/deadlocked) |
+| GET | `/api/repos/:repoId/graph/history/:snapshotId` | session | snapshot detail + `diffGraphs(prev, this)` |
+| GET | `/api/repos/:repoId/merge-plan` | session | readiness-aware merge plan (steps, parked, critical path) |
+| GET / PATCH | `/api/repos/:repoId/settings` | session (owner) | repo settings (bot, failOnConflict, aiEnabled, globs) |
+| GET / POST | `/api/repos/:repoId/tokens` | session (owner) | list tokens (prefix only) / create (returns token once) |
+| DELETE | `/api/repos/:repoId/tokens/:tokenId` | session (owner) | revoke token |
+| GET | `/api/overview` | session | cross-repo health (status counts, sparkline, most-blocking PR) |
+| POST | `/api/v1/preflight` | Bearer `preflight:read` | agent/CI preflight: will this change collide with open PRs? |
+| GET | `/api/v1/repos/:owner/:name/graph` | Bearer `graph:read` | graph for MCP/CI clients |
+| GET | `/api/v1/repos/:owner/:name/merge-plan` | Bearer `graph:read` | merge plan for MCP/CI clients |
+| POST | `/api/demo/preflight` | none (`DEMO_ENABLED`) | preflight against the demo fixture repo |
 | POST | `/api/webhooks/github` | HMAC | GitHub event receiver (returns 202 fast) |
 | GET | `/api/slack/install` | session | Slack OAuth redirect |
 | POST | `/api/slack/events` | Slack sig | Slack events / interactivity |
@@ -177,7 +225,25 @@ Validation errors carry an `errors` array; never leak stack traces. One shape fo
 
 - **Pagination:** list endpoints accept `?page` / `?perPage` (or cursor) and return `{ items, page,
   hasNext }`. Internally always use `octokit.paginate` against GitHub.
-- **Versioning:** prefix future breaking changes (`/api/v2/...`); the MVP is unversioned.
+- **Versioning:** the machine-facing API (tokens, MCP, CI) lives under `/api/v1/**` and is stable;
+  session routes used only by our UI stay unversioned. Graph payloads carry `schemaVersion` (2);
+  readers normalize older snapshots.
+
+**Preflight request/response (`POST /api/v1/preflight`):**
+
+```jsonc
+// request — either a unified diff or a file list
+{ "repo": "acme/storefront", "patch": "diff --git a/src/auth.ts b/src/auth.ts
+@@ -40,3 +40,4 @@ ...",
+  "files": [{ "path": "src/auth.ts", "ranges": [[40, 48]] }], "baseSha": "optional" }
+// response
+{ "risk": "high",                        // none | low | high
+  "collisions": [{ "pr": { "number": 42, "title": "…", "url": "…", "author": "…", "status": "SAFE" },
+                   "kind": "BLOCKS",     // BLOCKS | TOUCHES | SEMANTIC
+                   "files": ["src/auth.ts"], "regions": [{ "file": "src/auth.ts", "baseStart": 40, "baseEnd": 48 }],
+                   "symbols": [] }],
+  "waitFor": [42], "recommendation": "Wait for #42 to merge, then rebase.", "graphVersion": 17 }
+```
 - **Idempotency:** webhooks dedupe on `X-GitHub-Delivery`; `POST /sync` is naturally idempotent (it
   recomputes from current GitHub state).
 
@@ -188,21 +254,32 @@ Validation errors carry an `errors` array; never leak stack traces. One shape fo
 | client→server | `graph:subscribe` | `repoId: string` | join room `repo:{repoId}` |
 | client→server | `graph:unsubscribe` | `repoId: string` | leave room |
 | server→client | `graph:current` | `DependencyGraph` | snapshot sent on subscribe |
-| server→client | `graph:updated` | `{ graph, diff, syncedAt }` | recompute finished; `diff` lists status transitions |
+| server→client | `graph:updated` | `{ graph, diff, syncedAt, reason }` | recompute (`reason: "recompute"`) or readiness fast path (`"readiness"`) finished; `diff` lists status transitions |
 
-`diff` drives the UI animations (e.g. `#57 BLOCKED→SAFE`) and the Slack message. Multi-replica
+`graph` is the schema-v2 DTO: edges carry `blocking`, `severity`, `evidence`, `certainty`,
+`conflicts`, `symbols`, `semanticVerdict`/`explanation`/`resolution`; nodes carry `readiness`,
+`workspaces`, `planStep`; the graph carries `mergePlan`. `diff` drives the UI animations (e.g. `#57 BLOCKED→SAFE`) and the Slack message. Multi-replica
 delivery requires the `@socket.io/redis-adapter`.
 
 ### B.5 Webhook event contract (which GitHub events, what we do)
 
-Subscribe to **`pull_request`** (actions: `opened`, `closed`, `synchronize`, `edited`, `reopened`) and
-optionally **`installation`/`installation_repositories`** (connect/disconnect). On any relevant
-`pull_request` action:
+| Event | Actions | Job |
+|---|---|---|
+| `pull_request` | `opened`, `closed`, `synchronize`, `edited`, `reopened`, `ready_for_review`, `converted_to_draft` | full recompute |
+| `pull_request_review` | `submitted`, `dismissed` | readiness fast path |
+| `check_suite` / `check_run` | `completed`, `created`, `rerequested` | readiness fast path |
+| `check_run` | `requested_action` (identifier `recompute`, our own run only) | full recompute |
+| `status` | — | readiness fast path |
+| `installation` / `installation_repositories` | created / deleted / added / removed | provisioning |
+
+On a full-recompute event:
 
 1. Verify HMAC (A.3) → dedupe on delivery id → `XADD` to `webhook-events` → return **202**.
 2. The worker recomputes the **whole** graph from current GitHub state (idempotent w.r.t. ordering —
    GitHub does not guarantee webhook order), diffs against the last snapshot, persists, pushes
-   `graph:updated`, and fires the Slack notification for newly-unblocked PRs.
+   `graph:updated`, fires the Slack notification for newly-unblocked PRs, and (if `botEnabled`)
+   publishes changed Check Runs. If a recompute for the repo is already running, the job sets the
+   repo's dirty flag and the running recompute re-runs once — no event is lost.
 3. A periodic reconciliation sync (every N minutes) is the safety net for any webhook GitHub dropped —
    this is what bounds staleness even under lost events.
 

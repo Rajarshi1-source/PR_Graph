@@ -50,7 +50,26 @@ const Env = z.object({
     .transform((v) => v === "true"),
   LLM_PROVIDER: z.string().default("openai:gpt-5.4-mini"),
   OPENAI_API_KEY: z.string().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  // OpenAI-compatible endpoint for the local `ollama:<model>` provider.
+  OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434/v1"),
   LLM_DAILY_BUDGET_USD: z.coerce.number().nonnegative().default(5),
+
+  // Phase 3 — Tier-2 merge simulation (diff3 over fetched blobs for approximate edges).
+  MERGE_SIM_DEEP: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  MERGE_SIM_MAX_PAIRS: z.coerce.number().int().nonnegative().default(20),
+
+  // Process role (SCALING.md §2): `all` (default) runs web + Socket.IO + worker in one process.
+  PROCESS_ROLE: z.enum(["all", "web", "worker"]).default("all"),
+
+  // Public /demo page + demo preflight (static fixtures only). Off in production unless opted in.
+  DEMO_ENABLED: z
+    .enum(["true", "false"])
+    .default(process.env.NODE_ENV === "production" ? "false" : "true")
+    .transform((v) => v === "true"),
 });
 
 const parsed = Env.safeParse(process.env);

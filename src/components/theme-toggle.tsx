@@ -11,7 +11,9 @@ export function ThemeToggle() {
     <Button
       variant="ghost"
       size="icon"
-      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      // Static label: the resolved theme is unknown during SSR, so a theme-dependent label would
+      // cause a hydration mismatch. The icons show the current state.
+      aria-label="Toggle dark mode"
       onClick={() => setTheme(isDark ? "light" : "dark")}
     >
       <Sun className="size-4 scale-100 dark:scale-0" aria-hidden />

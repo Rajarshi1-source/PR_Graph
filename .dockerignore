@@ -11,3 +11,10 @@ coverage
 .vscode
 .idea
 README.md
+
+# not part of the app image
+packages
+e2e
+playwright-report
+test-results
+docs

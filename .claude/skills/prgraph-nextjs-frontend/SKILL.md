@@ -9,7 +9,9 @@ description: >-
   generateMetadata, and loading/error/empty states — even when Next.js is not named. Trigger on App
   Router, server component, client component, use client, async params/searchParams, React Flow,
   xyflow, dagre, Socket.IO client, useGraph, generateMetadata, proxy.ts, Turbopack, TanStack Query,
-  or Suspense. MANDATE: Next.js 16 App Router + React 19.2 + TypeScript strict, Server-Components-first,
+  Suspense, merge plan panel, CI overlay, readiness, what-if, edge tooltip, conflict regions, history
+  page, export PNG/SVG/Mermaid, workspace filter, org overview, demo page, preflight playground, or
+  Playwright E2E. MANDATE: Next.js 16 App Router + React 19.2 + TypeScript strict, Server-Components-first,
   no Pages Router; request APIs (`params`, `searchParams`) are async Promises and must be awaited;
   React Flow is the graph renderer and must live in a Client Component. Pair with
   prgraph-tailwind-shadcn for styling and prgraph-nextjs-backend for the API.
@@ -234,15 +236,52 @@ export function proxy(request: NextRequest) {
 export const config = { matcher: ['/dashboard/:path*', '/repo/:path*'] };
 ```
 
-## File structure (frontend slice)
+## File structure (frontend slice — actual paths)
 
 ```
-app/{layout,page}.tsx · app/(auth)/login · app/dashboard · app/repo/[owner]/[name]/{page,loading,error}.tsx
-components/graph/{GraphCanvas,PRNode,DependencyEdge,GraphLegend,PRDetailPanel,MergeOrderPanel}.tsx
-hooks/{useDagreLayout,useGraphSocket,useRepos}.ts
-types/{graph,api}.ts        // shared DTOs + Zod schemas
-src/proxy.ts                // route gate (replaces middleware.ts)
+src/app/{layout,page,login,dashboard}/…           landing · login · org overview (repo health cards)
+src/app/repo/[owner]/[name]/{page,loading,error}  graph page (Server Component → GraphCanvas island)
+src/app/repo/[owner]/[name]/{settings,history}/   settings (Slack, Check Run bot, tokens, globs) · timeline
+src/app/demo/page.tsx                             public demo (static fixtures, real pure engine)
+src/components/graph/                             GraphCanvas, PRNode, DependencyEdge, GraphLegend,
+                                                  PRDetailPanel, ConflictRegions, MergePlanPanel,
+                                                  ExportMenu, WorkspaceFilter, statusMeta, layout
+src/hooks/{useGraphSocket,useResync,useSlackConfig,…}.ts
+src/lib/graph/types.ts                            THE shared DTO module (server + client)
+src/lib/api/{client,schemas}.ts                   apiFetch + Zod response schemas
+src/proxy.ts                                      route gate (replaces middleware.ts)
+e2e/*.spec.ts · playwright.config.ts              Playwright E2E against the built custom server
 ```
+
+## Phase 3 UI rules
+
+- **One canvas, two modes:** `GraphCanvas mode="live" | "demo"`. Demo mode disables the socket,
+  re-sync and settings, and shows a demo banner; everything else (panel, plan, what-if, export,
+  filters) is identical so the E2E suite exercises real components.
+- **Pure functions run on the client too.** `whatIfMerge`, `aggregateByWorkspace`, `toMermaid` and
+  `normalizeGraph` come from `src/lib/graph/**` (pure, no server imports) — never re-implement them
+  in components. Always pass socket/initial payloads through `normalizeGraph`.
+- **Merge plan > Kahn levels:** `MergePlanPanel` shows `graph.mergePlan` (steps, parked, critical
+  path) with a secondary "Levels" tab; "Copy as Markdown" uses a pure formatter.
+- **Edge tooltips & AI copy:** show verdict + confidence + explanation + `resolution`; label the
+  source ("AI", "heuristic", "diff3") — never present a heuristic verdict as AI.
+- **Export:** `html-to-image` on `.react-flow__viewport` with `getNodesBounds` +
+  `getViewportForBounds` (React Flow's documented recipe), filenames `prgraph-<repo>.png|svg`;
+  Mermaid/JSON via pure functions + `navigator.clipboard` / Blob download.
+- **History:** `/repo/[owner]/[name]/history` is a Server Component list of snapshots; selecting one
+  fetches `diffGraphs(prev, this)` via TanStack Query.
+- **"Last synced"** is rendered from `syncedAt` / `lastSyncAt` with a relative-time formatter that
+  re-renders on an interval (client), never baked into static SSR HTML that goes stale.
+
+## E2E (Playwright)
+
+- Specs live in `e2e/`, run Chromium against the **built** custom server (`node dist/server.mjs`),
+  and target `/demo` for graph interactions (deterministic fixtures, no GitHub needed).
+- Select by role/label/text (`getByRole('button', { name: /PR #42/ })`), never by CSS class; nodes
+  and edge labels carry `aria-label`s for this reason.
+- `@axe-core/playwright` scans `/` and `/demo`; serious/critical violations fail the job.
+- Screenshot generation (`e2e/screenshots.spec.ts`, tag `@screenshots`) writes `docs/images/*.png`
+  for the README and is excluded from CI (`--grep-invert @screenshots`).
 
 ## Anti-patterns to fix on sight
 
@@ -260,6 +299,9 @@ src/proxy.ts                // route gate (replaces middleware.ts)
 | `revalidateTag('x')` single-arg | `revalidateTag('x', 'max')`, or `updateTag` for read-your-writes |
 | `forwardRef` for a brand-new component | React 19: `ref` is a normal prop |
 | Trusting `fetch().json()` shape blindly | parse with the shared Zod schema |
+| Re-implementing what-if / workspace / Mermaid logic in a component | import the pure `src/lib/graph/**` function |
+| Rendering a cached/socket graph without `normalizeGraph` | normalize at the boundary (v1 snapshots exist) |
+| E2E selectors on Tailwind classes | role / label / text selectors |
 
 ## Quick reference
 

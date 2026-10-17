@@ -123,3 +123,39 @@ export const aiBudgetRemaining = gauge({
   name: "prgraph_ai_budget_remaining_usd",
   help: "Remaining LLM daily budget in USD",
 });
+
+// ── Phase 3 differentiators ───────────────────────────────────────────────────────────────────
+
+/** Tier-2 merge simulations (diff3 over fetched blobs) by outcome. */
+export const mergeSimulations = counter({
+  name: "prgraph_merge_simulations_total",
+  help: "Deep merge simulations by outcome (clean | conflict | unknown | error | skipped)",
+  labelNames: ["outcome"],
+});
+
+/** Recomputes that ran again because webhooks arrived while the repo lock was held. */
+export const recomputeCoalesced = counter({
+  name: "prgraph_recompute_coalesced_total",
+  help: "Coalesced recompute re-runs (events that arrived during a running recompute)",
+});
+
+/** Readiness-only fast-path updates (CI / review webhooks). */
+export const readinessUpdates = counter({
+  name: "prgraph_readiness_updates_total",
+  help: "Readiness fast-path updates",
+  labelNames: ["trigger"],
+});
+
+/** Check Run writes vs skips (content-hash unchanged). */
+export const checkRunWrites = counter({
+  name: "prgraph_check_run_writes_total",
+  help: "PRGraph Check Run publisher results",
+  labelNames: ["result"],
+});
+
+/** Preflight API requests by risk outcome. */
+export const preflightRequests = counter({
+  name: "prgraph_preflight_requests_total",
+  help: "Preflight requests by risk outcome",
+  labelNames: ["risk", "source"],
+});

@@ -1,0 +1,31 @@
+{
+  "name": "prgraph-mcp",
+  "version": "0.1.0",
+  "description": "MCP server + CLI for PRGraph: ask whether a change will collide with any open pull request before you open one.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "prgraph-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/index.js --banner:js=\"#!/usr/bin/env node\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

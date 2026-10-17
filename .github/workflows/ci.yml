@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege (CodeQL "workflow does not contain permissions"): every job only reads the repo.
+permissions:
+  contents: read
+
 env:
   # Placeholder so `prisma generate` / `next build` can resolve env("DATABASE_URL").
   DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
@@ -20,11 +24,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # Production dependencies must be clean; dev-only advisories with no upstream fix are tracked in README.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npx prisma generate
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run eval
+      - run: npm run eval:impact:ci
       - run: npm run build
       - run: npm run build:server
 
@@ -66,6 +73,87 @@ jobs:
       - run: npx prisma generate
       - run: npm run db:deploy
       - run: npm run test:integration
+
+  # Browser E2E against the production build of the custom server (Next + Socket.IO). Graph flows
+  # run on /demo (deterministic fixtures), so no GitHub credentials are needed.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: verify
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+      REDIS_URL: redis://localhost:6379
+      # Non-secret placeholders: production mode validates that these exist; E2E never calls GitHub.
+      SESSION_SECRET: e2e-session-secret-not-a-real-secret-0123456789
+      GITHUB_APP_ID: "1"
+      GITHUB_APP_PRIVATE_KEY: e2e-placeholder
+      GITHUB_WEBHOOK_SECRET: e2e-webhook-secret-placeholder
+      GITHUB_CLIENT_ID: e2e-client-id
+      GITHUB_CLIENT_SECRET: e2e-client-secret
+      DEMO_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run db:deploy
+      - run: npm run build
+      - run: npm run build:server
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+        env:
+          NODE_ENV: production
+          CI: "true"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # The MCP server / CLI package has its own toolchain.
+  mcp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/prgraph-mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/prgraph-mcp/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
 
   # AI eval — only does real work when an OpenAI key is configured (forks/PRs without the secret
   # skip cleanly). Gates the model's accuracy (F1 >= 0.80 + no >5pt regression vs baseline) before

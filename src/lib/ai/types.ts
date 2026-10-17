@@ -8,6 +8,8 @@ export const VerdictSchema = z.object({
   verdict: z.enum(["TRUE_CONFLICT", "CO_LOCATED", "UNCERTAIN"]),
   confidence: z.number().min(0).max(1),
   explanation: z.string().max(400),
+  /** conflict.v4+: a concrete suggested resolution (merge order / what to rebase / what to edit). */
+  resolution: z.string().max(400).optional(),
 });
 
 export type ConflictVerdict = z.infer<typeof VerdictSchema>;
@@ -20,4 +22,9 @@ export interface ConflictInput {
   sharedFiles: string[];
   diffA: string;
   diffB: string;
+  /**
+   * Deterministic engine findings for this pair, rendered as text (conflicting base-line regions,
+   * cross-file symbol links). Lets the prompt focus on what the engine already found.
+   */
+  focus?: string;
 }

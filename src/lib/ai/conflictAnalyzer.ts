@@ -16,7 +16,13 @@ export type AnalyzedVerdict = ConflictVerdict & { source: VerdictSource };
  * Prefer {@link analyzeOrFallback} from callers — it also short-circuits on the budget breaker and
  * emits the fallback telemetry. `analyzeConflict` is the path the eval grades.
  */
-export async function analyzeConflict(input: ConflictInput): Promise<AnalyzedVerdict> {
+/** Eval / experiment overrides — production always uses the configured provider + active prompt. */
+export interface AnalyzeOptions {
+  provider?: string;
+  promptVersion?: string;
+}
+
+export async function analyzeConflict(input: ConflictInput, opts: AnalyzeOptions = {}): Promise<AnalyzedVerdict> {
   aiRequests.inc();
 
   // When AI is disabled the shipping verdict is the deterministic heuristic — no LLM, no cache/Redis
@@ -28,7 +34,11 @@ export async function analyzeConflict(input: ConflictInput): Promise<AnalyzedVer
     return { ...verdict, source: "heuristic" };
   }
 
-  const key = verdictKey(ACTIVE_PROMPT_VERSION, input);
+  const promptVersion = opts.promptVersion ?? ACTIVE_PROMPT_VERSION;
+  const provider = opts.provider ?? env.LLM_PROVIDER;
+  // The provider is content-key material too: a model-swap experiment must never read another
+  // model's cached verdicts.
+  const key = verdictKey(promptVersion, input, provider);
 
   const cached = await getCachedVerdict(key).catch(() => null);
   if (cached) {
@@ -40,7 +50,7 @@ export async function analyzeConflict(input: ConflictInput): Promise<AnalyzedVer
   let verdict: ConflictVerdict;
   let source: VerdictSource;
   try {
-    verdict = await runAI(input);
+    verdict = await runAI(input, provider, promptVersion);
     source = "ai";
   } catch {
     verdict = heuristicVerdict(input);
@@ -79,9 +89,9 @@ function heuristicResult(input: ConflictInput, reason: string): AnalyzedVerdict 
   return { ...verdict, source: "heuristic" };
 }
 
-async function runAI(input: ConflictInput): Promise<ConflictVerdict> {
-  const prompt = getPrompt().buildPrompt(input);
-  const adapter = makeAdapter();
+async function runAI(input: ConflictInput, provider: string, promptVersion: string): Promise<ConflictVerdict> {
+  const prompt = getPrompt(promptVersion).buildPrompt(input);
+  const adapter = makeAdapter(provider);
   const raw = await adapter.completeJSON(prompt, { maxTokens: 300 });
   // Validate strictly — malformed output throws and the caller falls back to the heuristic.
   return VerdictSchema.parse(raw);

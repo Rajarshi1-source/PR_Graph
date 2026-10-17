@@ -9,11 +9,20 @@ import type { DependencyGraph } from "@/lib/graph/types";
  * They exercise the cache + stream paths that unit tests mock out.
  */
 const emptyGraph: DependencyGraph = {
+  schemaVersion: 2,
   nodes: [],
   edges: [],
   mergeOrder: { levels: [], inCycle: [], totalLevels: 0 },
   cycles: [],
-  stats: { totalPRs: 0, safePRs: 0, blockedPRs: 0, deadlockedPRs: 0, totalDependencies: 0 },
+  stats: {
+    totalPRs: 0,
+    safePRs: 0,
+    atRiskPRs: 0,
+    blockedPRs: 0,
+    deadlockedPRs: 0,
+    totalDependencies: 0,
+    blockingDependencies: 0,
+  },
 };
 
 const TEST_REPO_ID = 999_999;

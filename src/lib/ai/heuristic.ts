@@ -1,54 +1,60 @@
 import type { ConflictInput, ConflictVerdict } from "./types";
+import { parsePatch, splitMultiFileDiff } from "@/lib/graph/patch/parsePatch";
+import { conflictingRegions } from "@/lib/graph/patch/regions";
+import { extractFacts, type FileSymbolFacts } from "@/lib/graph/symbols/extract";
 
 /**
- * Deterministic heuristic fallback (plan §14). No LLM, no I/O — parses unified-diff hunk headers
- * and compares the changed line ranges:
- *   - overlapping ranges in a shared file  → TRUE_CONFLICT
- *   - same file but disjoint ranges        → CO_LOCATED
- *   - nothing parseable                    → UNCERTAIN
- * This is what PRGraph degrades to whenever the AI layer is disabled or fails.
+ * Deterministic heuristic fallback (plan §14) — what PRGraph degrades to whenever the AI layer is
+ * disabled, over budget or failing. No LLM, no I/O. Reuses the engine's own primitives:
+ *   1. per file, in BASE coordinates: overlapping/adjacent change regions → TRUE_CONFLICT
+ *   2. cross-file symbol impact: one side removes/renames/re-signatures a definition the other side
+ *      newly references → TRUE_CONFLICT (git merges it, the build breaks)
+ *   3. parseable but disjoint and no symbol link → CO_LOCATED
+ *   4. nothing parseable (binary, generated, prose) → UNCERTAIN
  */
-interface Range {
-  start: number;
-  end: number;
-}
-
-const HUNK = /@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/g;
-
-function parseRanges(diff: string): Range[] {
-  const ranges: Range[] = [];
-  let m: RegExpExecArray | null;
-  HUNK.lastIndex = 0;
-  while ((m = HUNK.exec(diff)) !== null) {
-    const start = Number(m[1]);
-    const len = m[2] ? Number(m[2]) : 1;
-    ranges.push({ start, end: start + Math.max(len, 1) - 1 });
-  }
-  return ranges;
-}
-
-function overlaps(a: Range, b: Range): boolean {
-  return a.start <= b.end && b.start <= a.end;
-}
-
 export function heuristicVerdict(input: ConflictInput): ConflictVerdict {
-  const a = parseRanges(input.diffA);
-  const b = parseRanges(input.diffB);
+  const fallbackFile = input.sharedFiles[0] ?? "file";
+  const filesA = splitMultiFileDiff(input.diffA, fallbackFile);
+  const filesB = splitMultiFileDiff(input.diffB, fallbackFile);
 
-  if (a.length === 0 || b.length === 0) {
+  let parseableFiles = 0;
+  for (const file of [...new Set([...filesA.keys(), ...filesB.keys()])].sort()) {
+    const a = parsePatch(filesA.get(file));
+    const b = parsePatch(filesB.get(file));
+    if (!a.parseable || !b.parseable) continue;
+    parseableFiles++;
+    const regions = conflictingRegions(a.regions, b.regions);
+    if (regions.length) {
+      const r = regions[0];
+      const lines = r.baseEnd >= r.baseStart ? `lines ${r.baseStart}–${r.baseEnd}` : `line ${r.baseStart}`;
+      return {
+        verdict: "TRUE_CONFLICT",
+        confidence: 0.85,
+        explanation: `Both PRs change overlapping or adjacent base ${lines} of ${file} — git will report a merge conflict.`,
+        resolution: `Merge #${input.prA} first, then rebase #${input.prB} and reconcile ${file}.`,
+      };
+    }
+  }
+
+  const symbol = symbolClash(filesA, filesB) ?? symbolClash(filesB, filesA, true);
+  if (symbol) {
+    const [definer, user] = symbol.swapped ? [input.prB, input.prA] : [input.prA, input.prB];
+    return {
+      verdict: "TRUE_CONFLICT",
+      confidence: 0.7,
+      explanation: `#${definer} ${symbol.change === "signature" ? "changes the signature of" : symbol.change === "renamed" ? "renames" : "removes"} \`${symbol.name}\`, which #${user} references — the merge is textually clean but the result will not build.`,
+      resolution: `Merge #${definer} first, then update #${user}'s use of \`${symbol.name}\`.`,
+    };
+  }
+
+  const anyParseable =
+    parseableFiles > 0 ||
+    [...filesA.values(), ...filesB.values()].some((p) => parsePatch(p).parseable);
+  if (!anyParseable) {
     return {
       verdict: "UNCERTAIN",
       confidence: 0.4,
       explanation: "Could not parse diff hunks for one or both PRs; manual review recommended.",
-    };
-  }
-
-  const collision = a.some((ra) => b.some((rb) => overlaps(ra, rb)));
-  if (collision) {
-    return {
-      verdict: "TRUE_CONFLICT",
-      confidence: 0.8,
-      explanation: "Both PRs modify overlapping line ranges in shared files — likely a real conflict.",
     };
   }
 
@@ -57,4 +63,30 @@ export function heuristicVerdict(input: ConflictInput): ConflictVerdict {
     confidence: 0.7,
     explanation: "PRs touch the same files but in disjoint line ranges — probably independently mergeable.",
   };
+}
+
+function facts(files: Map<string, string>): FileSymbolFacts[] {
+  const out: FileSymbolFacts[] = [];
+  for (const [file, patch] of [...files.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const f = extractFacts(file, patch);
+    if (f) out.push(f);
+  }
+  return out;
+}
+
+function symbolClash(
+  definerFiles: Map<string, string>,
+  userFiles: Map<string, string>,
+  swapped = false,
+): { name: string; change: string; swapped: boolean } | null {
+  const userFacts = facts(userFiles);
+  const refs = new Set(userFacts.flatMap((f) => [...f.refs]));
+  const userDefs = new Set(userFacts.flatMap((f) => [...f.defs.keys()]));
+  for (const f of facts(definerFiles)) {
+    for (const [name, change] of f.defs) {
+      if (change === "added" || userDefs.has(name)) continue;
+      if (refs.has(name)) return { name, change, swapped };
+    }
+  }
+  return null;
 }

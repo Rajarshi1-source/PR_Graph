@@ -8,12 +8,14 @@ const TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
  * Content-addressed cache key (plan §15): same prompt version + same diffs ⇒ same key, so an
  * identical analysis is never paid for twice and changing the prompt invalidates everything.
  */
-export function verdictKey(promptVersion: string, input: ConflictInput): string {
+export function verdictKey(promptVersion: string, input: ConflictInput, provider?: string): string {
   const canonical = JSON.stringify({
     v: promptVersion,
     files: [...input.sharedFiles].sort(),
     a: input.diffA,
     b: input.diffB,
+    ...(input.focus ? { f: input.focus } : {}),
+    ...(provider ? { p: provider } : {}),
   });
   const hash = crypto.createHash("sha256").update(canonical).digest("hex");
   return `ai:verdict:${promptVersion}:${hash}`;

@@ -1,4 +1,5 @@
 import type { GraphDiff } from "@/lib/graph/diffGraphs";
+import type { DependencyGraph } from "@/lib/graph/types";
 import { env } from "@/lib/env";
 import type { SlackMessage } from "./client";
 
@@ -42,8 +43,10 @@ class SlackMessageBuilder {
 export function buildUnblockedMessage(input: {
   fullName: string;
   diff: GraphDiff;
+  /** Current graph — when present, the merge plan's next step is announced. */
+  graph?: DependencyGraph;
 }): SlackMessage {
-  const { fullName, diff } = input;
+  const { fullName, diff, graph } = input;
   const unblocked = diff.newlyUnblocked;
 
   const builder = new SlackMessageBuilder().header("PR Dependency Update");
@@ -59,9 +62,16 @@ export function buildUnblockedMessage(input: {
           `• <https://github.com/${fullName}/pull/${c.prNumber}|#${c.prNumber}> ${c.title}`,
       )
       .join("\n");
-    builder.section(`🎉 *Now safe to merge:*\n${list}`);
+    builder.section(`🎉 *Now unblocked:*\n${list}`);
   } else {
     builder.context("No PRs were unblocked by this change.");
+  }
+
+  const next = graph?.mergePlan?.steps[0];
+  if (next) {
+    const green = next.prs.every((id) => graph?.nodes.find((n) => n.id === id)?.data.readiness?.ci === "success");
+    const label = green ? ` (${next.prs.length > 1 ? "all" : "CI"} green)` : "";
+    builder.section(`➡️ *Next up:* merge ${next.prs.map((id) => `#${id}`).join(", ")}${label}`);
   }
 
   const [owner, name] = fullName.split("/");

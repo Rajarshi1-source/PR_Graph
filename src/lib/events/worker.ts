@@ -1,7 +1,8 @@
 import { redis } from "@/lib/cache/redis";
 import { prisma } from "@/lib/db/prisma";
 import { STREAM, GROUP, DLQ } from "./queue";
-import { recomputeGraph } from "@/lib/graph/service";
+import { recomputeGraph, refreshReadiness } from "@/lib/graph/service";
+import { CHECK_NAME, RECHECK_ACTION } from "@/lib/bot/publishChecks";
 import {
   handleInstallationWebhook,
   handleInstallationReposWebhook,
@@ -20,6 +21,8 @@ interface WebhookJob {
     installation?: { id?: number; account?: { login?: string; type?: string } };
     pull_request?: { number?: number };
     sender?: { id?: number };
+    requested_action?: { identifier?: string };
+    check_run?: { name?: string };
   };
 }
 
@@ -125,6 +128,21 @@ async function handleJob(job: WebhookJob): Promise<void> {
       return handleInstallationWebhook(job.payload);
     case "installation_repositories":
       return handleInstallationReposWebhook(job.payload);
+    case "check_run":
+      // Our own "Re-check" button → full recompute; any other check run → readiness only.
+      if (
+        job.payload.action === "requested_action" &&
+        job.payload.requested_action?.identifier === RECHECK_ACTION &&
+        job.payload.check_run?.name === CHECK_NAME
+      ) {
+        return handleRecheck(job);
+      }
+      if (job.payload.check_run?.name === CHECK_NAME) return; // our own writes echo back — ignore
+      return handleReadiness(job);
+    case "check_suite":
+    case "status":
+    case "pull_request_review":
+      return handleReadiness(job);
     default:
       return; // ignored event type
   }
@@ -147,6 +165,28 @@ async function handlePullRequest(job: WebhookJob): Promise<void> {
 
   // End-to-end latency: webhook received (enqueue ts) → recompute complete.
   if (job.ts) webhookLatency.observe(Date.now() - job.ts);
+}
+
+async function connectedRepoId(job: WebhookJob): Promise<number | null> {
+  const fullName = job.payload.repository?.full_name;
+  if (!fullName) return null;
+  const repo = await prisma.repository.findFirst({ where: { fullName }, select: { id: true } });
+  return repo?.id ?? null;
+}
+
+/** CI / review / status change → readiness fast path (no PR/file refetch, no engine run). */
+async function handleReadiness(job: WebhookJob): Promise<void> {
+  const repoId = await connectedRepoId(job);
+  if (!repoId) return;
+  await refreshReadiness(repoId, job.event);
+  if (job.ts) webhookLatency.observe(Date.now() - job.ts);
+}
+
+/** "Re-check" button on the PRGraph Check Run → fully fresh recompute. */
+async function handleRecheck(job: WebhookJob): Promise<void> {
+  const repoId = await connectedRepoId(job);
+  if (!repoId) return;
+  await recomputeGraph({ repoId, triggeredBy: "check_run:recheck", forceFresh: true });
 }
 
 function parseFields(fields: string[]): WebhookJob {

@@ -1,5 +1,6 @@
 import { redis } from "./redis";
 import type { DependencyGraph } from "@/lib/graph/types";
+import { normalizeGraph } from "@/lib/graph/normalize";
 
 const GRAPH_TTL_SECONDS = 300; // 5 min — clients get a stale-but-valid graph during recompute
 
@@ -8,7 +9,7 @@ const versionKey = (repoId: number) => `graph:version:${repoId}`;
 
 export async function getCachedGraph(repoId: number): Promise<DependencyGraph | null> {
   const hit = await redis.get(graphKey(repoId));
-  return hit ? (JSON.parse(hit) as DependencyGraph) : null;
+  return hit ? normalizeGraph(JSON.parse(hit)) : null; // v1 entries may still be cached
 }
 
 export async function setCachedGraph(repoId: number, graph: DependencyGraph): Promise<number> {

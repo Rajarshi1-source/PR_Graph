@@ -46,6 +46,7 @@
 19. **[NEW] Deployment Strategies**
 20. Open Source Launch Strategy
 21. Deployment Checklist — Go Live
+22. **[PHASE 3] Differentiators That Beat the Market + Revised Decisions** (scaling → `SCALING.md`)
 
 ---
 
@@ -142,15 +143,15 @@ This is a deliberate, defensible choice. Here's the interview answer:
 **Phase 2 — The Differentiator (build after MVP demos cleanly):**
 - **AI Semantic Conflict Analysis** — the headline feature. Promote file-level overlap to *semantic* conflict detection: feed the actual diff hunks of two overlapping PRs to an LLM, which decides whether they truly conflict (both edit the same function) or merely co-locate (one edits imports, the other edits a far-away function), and emits a plain-English explanation + suggested resolution. Ships with a strict heuristic fallback so the product never breaks when the LLM is unavailable or over budget. Full design in §14, MLOps wrapper in §15.
 
-**Nice to Have (Post-MVP):**
-- Line-level conflict detection (not just file-level) — partly subsumed by the AI feature
-- Merge queue suggestion ("merge these 3 PRs in this order")
-- Branch protection rule awareness
-- CI status overlay (green check / red X on PR nodes)
-- GitHub comment bot: "⚠️ This PR conflicts with #42, #57"
-- Multi-repo dependency view (monorepo support)
-- Dark mode (essential for dev tools)
-- Export graph as PNG/SVG
+**Nice to Have (Post-MVP)** — *Phase 3 status: all absorbed, see §22:*
+- Line-level conflict detection (not just file-level) → **§22 Feature A** (base-coordinate regions + diff3 deep verify)
+- Merge queue suggestion ("merge these 3 PRs in this order") → **§22 Feature C** (readiness-aware merge plan)
+- Branch protection rule awareness → **§22 Feature C** (branch rules + `reviewDecision` in readiness)
+- CI status overlay (green check / red X on PR nodes) → **§22 Feature C** (CI chips on nodes)
+- GitHub comment bot: "⚠️ This PR conflicts with #42, #57" → **§22 Feature D** (Check Run instead of comments)
+- Multi-repo dependency view (monorepo support) → **§22** workspace lens + org overview
+- Dark mode (essential for dev tools) → shipped in the MVP
+- Export graph as PNG/SVG → **§22** export menu (PNG / SVG / Mermaid / JSON)
 
 ### Week-by-Week Schedule
 
@@ -2478,6 +2479,49 @@ github.com/you/prgraph | prgraph.dev | ⭐ XX stars
 | **Total** | | **$5-18/month** |
 
 ---
+
+## 22. Phase 3 — Differentiators That Beat the Market (Oct 2026)
+
+**Positioning.** Merge queues (Graphite, Mergify, Aviator, Trunk, GitHub merge queue) discover
+conflicts only once a PR is *in* the queue, by rebasing and burning CI. AI reviewers (CodeRabbit,
+Greptile, Graphite Diamond) look at one PR at a time. GitHub reports only PR-vs-base conflicts.
+PRGraph predicts **PR-vs-PR** conflicts — textual and cross-file semantic — *before* anyone merges,
+and exposes them to humans (graph), GitHub (Check Run) and AI coding agents (preflight API + MCP).
+
+| # | Feature | What it does | Where |
+|---|---|---|---|
+| A | **Predictive merge simulation** | Exact line-level conflict regions between open PRs from base-coordinate patch analysis (zero extra API calls), upgraded by a diff3 sequential merge when bases drift | `src/lib/graph/patch/*`, `mergeSim.ts` |
+| B | **Cross-file symbol impact** | PR A renames/changes the signature of `getUser()`, PR B adds a call to it elsewhere → SEMANTIC edge (git merges cleanly, the build breaks) | `src/lib/graph/symbols/*`, `evals/impact.eval.ts` |
+| C | **Conflict-aware merge plan** | Readiness (CI, reviews, mergeable, draft, branch rules) + the blocking DAG → parallel merge batches, parked PRs with reasons, critical path, what-if simulation | `readiness.ts`, `mergePlan.ts`, `whatIf.ts` |
+| D | **Agent preflight + MCP + Check Run** | `POST /api/v1/preflight` answers "will my change collide?" for AI agents and CI; `prgraph-mcp` exposes it as MCP tools; an opt-in `PRGraph` Check Run reports conflicts on every PR | `src/lib/graph/preflight.ts`, `packages/prgraph-mcp`, `src/lib/bot/*` |
+
+Also shipped in Phase 3: AI explanation UI (edge tooltips, "AI says…" + suggested resolution),
+per-repo AI toggle, history timeline, "last synced", export (PNG/SVG/Mermaid/JSON), workspace lens and
+org overview, Anthropic + Ollama adapters for the model-swap experiment, a public `/demo`, Playwright
+E2E in CI, and `SCALING.md`.
+
+### 22.1 Revised decisions
+
+| # | Was | Now | Why |
+|---|---|---|---|
+| 1 | Edge type from shared-file count (1 TOUCHES / 2 BLOCKS / 3+ CRITICAL_BLOCK) | **BLOCKS** = changed regions overlap/adjacent in base coordinates; **TOUCHES** = disjoint, non-blocking; **INDIRECT** = transitive, non-blocking; **SEMANTIC** + **STACKED** block. `CRITICAL_BLOCK` → `severity: critical` (old snapshots normalized) | matches the MVP spec; file count is a poor proxy for git conflicts |
+| 2 | 3 statuses | + **AT_RISK** (yellow, "has dependencies") | the spec's green / yellow / red |
+| 3 | Edges always older → newer | STACKED parent → child, SEMANTIC definer → user | real cycles now exist → DEADLOCKED is meaningful |
+| 4 | Heuristic used `+` ranges across concatenated files | base (`-`) ranges per file; lockfiles/generated → TOUCHES | PRs share the base; hunks in different files never conflict |
+| 5 | AI may demote any edge | AI demotes only *approximate* evidence; annotates exact conflicts with explanation + resolution; logical risk on clean merges → AT_RISK | an exact textual conflict is a fact |
+| 6 | PR comment bot | opt-in **Check Run** (`neutral` by default, `failOnConflict` to gate) | no comment noise; can be a required check |
+| 7 | Merge order = Kahn levels | **Merge plan** (readiness-aware batches + critical path); Kahn levels kept as secondary view | a plan must respect CI/reviews, not just topology |
+| 8 | Recompute lock held → skip | dirty flag → lock holder re-runs | the old behaviour silently dropped webhooks |
+| 9 | One process does everything | `PROCESS_ROLE=all\|web\|worker` | first step to the SCALING.md topology |
+| 10 | Webhooks: `pull_request` only | + `pull_request_review`, `check_suite`, `check_run`, `status` (readiness fast path) | CI/review changes must update the plan cheaply |
+| 11 | App permissions: PRs/contents/metadata read | + Checks read/write, Commit statuses read, Actions read | CI overlay + Check Run |
+| 12 | `@slack/bolt` and `shadcn` CLI as runtime deps | removed (unused; large vulnerable transitive trees) | supply-chain surface |
+
+### 22.2 Scaling
+
+The architecture for millions of users (process roles, partitioned ingestion, incremental compute
+over SHA-keyed facts, GitHub API budgets, storage partitioning, realtime fan-out, AI cost) is in
+[`SCALING.md`](SCALING.md).
 
 ## Final Word — Why This Project Wins Interviews
 

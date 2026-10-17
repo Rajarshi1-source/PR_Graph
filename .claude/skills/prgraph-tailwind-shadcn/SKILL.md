@@ -2,10 +2,13 @@
 name: prgraph-tailwind-shadcn
 description: >-
   Style the PRGraph UI with Tailwind CSS and shadcn/ui. Use whenever building or refactoring ANY
-  visual component, theme, or layout: the custom React Flow PR node card with its SAFE / BLOCKED /
-  DEADLOCKED status states, dependency edges, the graph legend and controls, the PR detail side panel,
-  the conflict file list, repo dashboard cards, the merge-order panel, dark mode, accessibility, and
-  responsive layout — or whenever Tailwind, shadcn, Radix, components.json, the cn() helper, theming
+  visual component, theme, or layout: the custom React Flow PR node card with its SAFE / AT_RISK /
+  BLOCKED / DEADLOCKED status states, CI and review badges, readiness chips, dependency edges
+  (BLOCKS / TOUCHES / SEMANTIC / STACKED / INDIRECT / CO_LOCATED), edge AI tooltips, the graph legend
+  and toolbar (export, workspace filter, what-if), the PR detail side panel with conflict regions and
+  code previews, the merge-plan panel, the history timeline, org overview cards, the demo and preflight
+  playground, dark mode, accessibility, and responsive layout — or whenever Tailwind, shadcn, Base UI,
+  Radix, components.json, the cn() helper, theming
   via CSS variables, design tokens, or react-hook-form plus zod forms come up. Trigger even without an
   explicit ask when styling decisions are made, or when someone says make this look good or less
   generic. MANDATE: shadcn/ui components are copied INTO the repo at components/ui and edited there,
@@ -49,7 +52,27 @@ React Flow graph, where each PR is a status-coloured card and edges encode confl
 
 ## The PRGraph status colour system (the consistency anchor)
 
-Every node, badge, legend swatch, and edge maps to one of three statuses. Define them **once** as
+> **Current implementation (authoritative):** tokens live in `src/app/globals.css` as **oklch** CSS
+> variables exposed through Tailwind v4 `@theme inline` (`--color-status-*`, `--color-edge-*`), and
+> `src/components/graph/statusMeta.tsx` is the single TS map (label + short label + lucide icon +
+> classes) for nodes, chips, legend, edges. The UI kit is shadcn **base-nova** built on
+> **`@base-ui/react`** (not Radix) — preserve its a11y props the same way. The HSL snippet below is
+> the original illustration of the pattern.
+>
+> **Four statuses (Phase 3, matches the MVP spec's green / yellow / red):**
+>
+> | Status | Token | Hue | Icon | Label |
+> |---|---|---|---|---|
+> | `SAFE` | `--status-safe` | green | `CircleCheck` | Safe to merge |
+> | `AT_RISK` | `--status-at-risk` | yellow | `CircleAlert` | Has dependencies |
+> | `BLOCKED` | `--status-blocked` | red | `TriangleAlert` | Blocked |
+> | `DEADLOCKED` | `--status-deadlocked` | magenta/purple (distinct from red for colour-blind users) | `Lock` | Deadlocked (cycle) |
+>
+> Each has `-foreground` and `-bg` variants in **both** `:root` and `.dark`. Readiness/CI uses the
+> same family: CI success → `status-safe` + `CircleCheck`, failure → `status-blocked` + `CircleX`,
+> pending → `status-at-risk` + `Clock` (with `motion-safe:animate-pulse` at most), none → muted.
+
+Every node, badge, legend swatch, and edge maps to one of the statuses. Define them **once** as
 semantic tokens, then reference the token everywhere — never re-pick greens/ambers/reds per component.
 
 ```css
@@ -131,11 +154,37 @@ export function PRNode({ data, selected }: NodeProps<PRNodeData>) {
 }
 ```
 
-## Edge styling (conflict severity)
+## Edge styling (type × severity)
 
-Map edge `type` to width/colour via the same tokens: `CRITICAL_BLOCK` → solid `status-deadlocked`,
-thick; `BLOCKS` → `status-blocked`; `TOUCHES`/`CO_LOCATED` → dashed, muted. Keep stroke colours as
-`hsl(var(--status-*))` so they track dark mode.
+Stroke colours are `var(--edge-*)` tokens (theme-aware); the **dash pattern and label carry the
+meaning too** (never colour alone):
+
+| Edge | Token | Stroke | Label |
+|---|---|---|---|
+| `BLOCKS` | `--edge-blocks` (`--edge-critical` when `severity: "critical"`) | solid, 2px (3px critical); `approx` certainty adds a `6 3` dash | "blocks · 3 lines" |
+| `TOUCHES` | `--edge-touches` | dashed `5 5`, 1.5px | "touches" |
+| `SEMANTIC` | `--edge-semantic` (violet) | solid 2px + `Braces` icon in label | "uses `getUser()`" |
+| `STACKED` | `--edge-stacked` (blue) | solid 2px | "stacked" |
+| `INDIRECT` | `--edge-indirect` | dotted `2 4`, 1px, hidden unless toggled | "indirect" |
+| `CO_LOCATED` | `--edge-touches` | dashed, 1px | "co-located (AI)" |
+
+Edge labels render through `EdgeLabelRenderer` as focusable buttons (`tabIndex=0`, `aria-label`) and
+open a tooltip with the AI verdict, confidence and explanation (`components/ui/tooltip`).
+
+## Phase 3 surfaces (patterns)
+
+- **Conflict regions** in the PR panel: a `Card` per file, `font-mono text-xs` preview blocks, the
+  two sides labelled "#42" / "#57" with `bg-muted` gutters showing base line numbers; truncate with
+  `line-clamp` + "show more", never horizontal page scroll (use `overflow-x-auto` inside the block).
+- **Readiness chips** on nodes: ≤ 2 icon chips (CI, review) at the node footer, `size-3.5` icons,
+  `sr-only` text for screen readers.
+- **Merge-plan panel**: numbered steps (`ol`), each step a row of PR chips; parked PRs in a muted
+  section with reason chips; critical path toggle highlights nodes with `ring-2 ring-primary`.
+- **What-if mode**: affected nodes get `pr-node-flash`-style transient emphasis; merged nodes fade to
+  `opacity-40` with a dashed border; a `role="status"` live region announces "3 PRs would unblock".
+- **Org overview cards**: status count chips + a tiny sparkline (inline SVG, `stroke="currentColor"`,
+  `text-status-blocked`), never a charting lib for one line.
+- **Demo banner**: `bg-muted` strip "Demo data — acme/storefront" so screenshots are honest.
 
 ## Dark mode (next-themes + tokens)
 
@@ -165,6 +214,9 @@ For the Slack config and alert-preference forms, use the shadcn `Form` primitive
 with a `zodResolver`. Validation messages render through `FormMessage`; keep labels associated for a11y.
 
 ## Accessibility checklist
+
+- Every new control (export menu, workspace filter, what-if toggle, edge labels) is keyboard reachable
+  and named; the axe E2E check (`e2e/a11y.spec.ts`) must report no serious violations.
 
 - Visible focus ring on nodes, controls, and the side panel (`focus-visible:ring-2 ring-ring`).
 - The graph is operable by keyboard (Tab between nodes, Enter to open the detail panel).
