@@ -54,7 +54,7 @@
     "node-diff3": "^3.2.1",
     "octokit": "^5.0.5",
     "openai": "^6.44.0",
-    "opossum": "^9.0.0",
+    "opossum": "^10.0.0",
     "pg": "^8.22.0",
     "prisma": "^7.10.1",
     "prom-client": "^15.1.3",
