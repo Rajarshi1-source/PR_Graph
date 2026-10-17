@@ -134,13 +134,40 @@ random small files.
 
 - `languages.ts`: definition regexes per extension (TS/JS, Python, Go, Java/Kotlin, Rust, Ruby, C#,
   PHP), a keyword stop-list, min symbol length 3.
-- `extractFacts(file)`: `defs` (`added | removed | renamed | signature | body`) from removed/added
-  definition lines in the same hunk (+ hunk-header context), `refs` = identifiers in **added** lines.
-- `impactEdges(prs)`: A's `removed|renamed|signature` def ∩ B's new refs (B ≠ A, ref in a file A did
-  not define it in) → `SEMANTIC` A→B, `severity: "high"`, `certainty: "approx"`,
-  `symbols: [{ name, change, defFile, refFile }]`. A `body`-only change never creates an edge.
-- Graded offline by `evals/impact.eval.ts` against `evals/impact-pairs.json` (F1 ≥ 0.75 gate +
-  5-point regression guard vs `evals/impact-baseline.json`).
+- `extractFacts(file)`: `defs` (`added | removed | renamed | signature | compatible`) from removed /
+  added definition lines across the file. Multi-line parameter lists are re-joined, and overloads
+  are kept as variants. `refs`, `bareRefs` and `qualifiedRefs` hold identifiers in **added code
+  only**: `lexer.ts` blanks comments, strings, docstrings and raw strings across a hunk, and
+  `isProse()` drops natural-language lines whose opening delimiter is outside the hunk. A leading
+  `key:` is a property name, not a reference.
+- `signature.ts` decides `signature` (breaking) vs `compatible`:
+  - **Breaking:** a removed parameter; a new required parameter; a parameter type changed in a typed
+    language (TS, Rust, Go, JVM, C#, PHP); narrowed visibility (`export` dropped, `pub` →
+    `pub(crate)`, public → private); a field removed, retyped or newly required in a one-line TS
+    object type.
+  - **Not breaking:** optional, defaulted or variadic additions; widening to a union, `any` or
+    `unknown`; return-type, generic or comment-only edits; changes to a type alias, class or
+    constant body other than the above.
+  - An overload compatible with the old shape keeps it compatible.
+- Reach (`reach`, `members`):
+  - `private` (JVM, C#, PHP, TS members) and Rust non-`pub` items only affect the same file.
+  - Go unexported names only affect unqualified uses in the same directory.
+  - `pub` → `pub(crate)` only affects other crates.
+  - Members (methods, nested items) need `x.name` / `T::name` outside their own file.
+  - A private helper replaced by an `import` of the same name is `compatible`.
+  - A member, or a Go symbol, moved to another file in the same scope by the same PR is not a
+    removal.
+- `impactLinks(prs)`: A's `removed|renamed|signature` def ∩ B's reachable new refs (B ≠ A, B does
+  not change that def itself) → `SEMANTIC` A→B, `severity: "high"`, `certainty: "approx"`,
+  `symbols: [{ name, change, defFile, refFile }]`. A body-only or `compatible` change never creates
+  an edge.
+- Graded offline by `evals/impact.eval.ts`. Gates: per set, F1 ≥ 0.75 synthetic / ≥ 0.50 real, and a
+  5-point regression guard vs `evals/impact-baseline.json`. The sets are:
+  - `evals/impact-pairs.json`: synthetic, one behaviour each.
+  - `evals/impact-real-pairs.json`: 111 real commit pairs from 8 OSS repos, `dev` + `holdout`
+    splits; provenance and labelling rules are in `evals/README.md`.
+- **Rule changes are driven by `dev` failures. Never tune on `holdout`.** Add new real pairs by
+  labelling them from the diffs *before* running the detector on them.
 
 ### 1d. Tier-2 deep verify (`lib/graph/mergeSim.ts`, pure; blobs fetched by the backend)
 
