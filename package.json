@@ -53,7 +53,7 @@
     "next-themes": "^0.4.6",
     "node-diff3": "^3.2.1",
     "octokit": "^5.0.5",
-    "openai": "^6.44.0",
+    "openai": "^7.33.0",
     "opossum": "^9.0.0",
     "pg": "^8.22.0",
     "prisma": "^7.10.1",
