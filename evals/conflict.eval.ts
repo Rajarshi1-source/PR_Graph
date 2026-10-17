@@ -23,6 +23,13 @@ const minF1 = env.AI_ENABLED ? 0.8 : 0.6;
 const args = new Set(process.argv.slice(2));
 const saveBaseline = args.has("--save-baseline");
 const ciMode = args.has("--ci");
+/** `--provider anthropic:<model>` / `--prompt conflict.v3` — model-swap and prompt A/B runs. */
+const argValue = (name: string) => {
+  const i = process.argv.indexOf(name);
+  return i > 0 ? process.argv[i + 1] : undefined;
+};
+const provider = argValue("--provider");
+const promptVersion = argValue("--prompt");
 
 interface Fixture {
   name: string;
@@ -59,7 +66,7 @@ async function main() {
       diffA: f.diffA,
       diffB: f.diffB,
     };
-    const { verdict, source } = await analyzeConflict(input);
+    const { verdict, source } = await analyzeConflict(input, { provider, promptVersion });
     const isCorrect = verdict === f.expected;
     if (isCorrect) correct++;
 
@@ -80,7 +87,9 @@ async function main() {
   const accuracy = correct / fixtures.length;
 
   console.log("\n--- TRUE_CONFLICT metrics ---");
-  console.log(`mode     : ${env.AI_ENABLED ? "AI" : "heuristic"} (${fixtures.length} fixtures)`);
+  console.log(
+    `mode     : ${env.AI_ENABLED ? `AI ${provider ?? env.LLM_PROVIDER} · ${promptVersion ?? "active prompt"}` : "heuristic"} (${fixtures.length} fixtures)`,
+  );
   console.log(`accuracy : ${accuracy.toFixed(3)} (${correct}/${fixtures.length})`);
   console.log(`precision: ${precision.toFixed(3)}`);
   console.log(`recall   : ${recall.toFixed(3)}`);

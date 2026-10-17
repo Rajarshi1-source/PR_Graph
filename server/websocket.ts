@@ -72,13 +72,18 @@ io.on("connection", (socket) => {
 });
 
 httpServer.listen(env.PORT, () => {
-  console.log(`▶ PRGraph (Next + Socket.IO) on http://localhost:${env.PORT}`);
+  console.log(`▶ PRGraph (Next + Socket.IO, role=${env.PROCESS_ROLE}) on http://localhost:${env.PORT}`);
 });
 
-// Webhook recompute worker runs in the same process (bulkhead concurrency in the worker).
-runWorker(`worker-${process.pid}`).catch((err) => {
-  console.error("[worker] fatal:", err);
-});
+// PROCESS_ROLE (SCALING.md §2): `all` runs everything here; `web` serves pages, API and sockets
+// only; `worker` additionally runs the consumers. Workers still host Socket.IO with the Redis
+// adapter, so their graph:updated emits fan out to clients connected to any `web` replica.
+if (env.PROCESS_ROLE !== "web") {
+  // Webhook recompute worker (bulkhead concurrency inside the worker).
+  runWorker(`worker-${process.pid}`).catch((err) => {
+    console.error("[worker] fatal:", err);
+  });
 
-// Safety net for dropped webhooks: periodically recompute stale repos.
-startReconciliation();
+  // Safety net for dropped webhooks: periodically recompute stale repos.
+  startReconciliation();
+}

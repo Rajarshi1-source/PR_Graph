@@ -1,0 +1,134 @@
+[
+  {
+    "name": "ts-rename-vs-new-call",
+    "expected": true,
+    "a": [{ "file": "src/users/repo.ts", "patch": "@@ -12,3 +12,3 @@\n-export async function loadUser(id: string) {\n+export async function findUser(id: string) {\n   return db.users.get(id);" }],
+    "b": [{ "file": "src/routes/profile.ts", "patch": "@@ -20,2 +20,3 @@ export async function GET(req: Request) {\n   const id = await sessionId(req);\n+  const user = await loadUser(id);\n   return render(user);" }]
+  },
+  {
+    "name": "ts-signature-change-vs-call",
+    "expected": true,
+    "a": [{ "file": "src/lib/format.ts", "patch": "@@ -4,1 +4,1 @@\n-export function formatPrice(cents: number) {\n+export function formatPrice(cents: number, currency: string) {" }],
+    "b": [{ "file": "src/cart/total.tsx", "patch": "@@ -30,0 +31,1 @@\n+      <span>{formatPrice(total)}</span>" }]
+  },
+  {
+    "name": "ts-interface-change-vs-usage",
+    "expected": true,
+    "a": [{ "file": "src/types.ts", "patch": "@@ -1,1 +1,1 @@\n-export interface Settings { theme: string }\n+export interface Settings { theme: Theme; density: Density }" }],
+    "b": [{ "file": "src/app/settings.ts", "patch": "@@ -8,0 +9,1 @@\n+const defaults: Settings = { theme: 'dark' };" }]
+  },
+  {
+    "name": "ts-removed-export-vs-import",
+    "expected": true,
+    "a": [{ "file": "src/lib/legacy.ts", "patch": "@@ -10,4 +10,0 @@\n-export function legacyHash(s: string) {\n-  return md5(s);\n-}\n-" }],
+    "b": [{ "file": "src/auth/token.ts", "patch": "@@ -1,0 +2,1 @@\n+import { legacyHash } from '../lib/legacy';" }]
+  },
+  {
+    "name": "ts-arrow-rename-vs-call",
+    "expected": true,
+    "a": [{ "file": "src/hooks/useCart.ts", "patch": "@@ -3,1 +3,1 @@\n-export const useCartItems = () => useStore((s) => s.items);\n+export const useCartLines = () => useStore((s) => s.lines);" }],
+    "b": [{ "file": "src/components/MiniCart.tsx", "patch": "@@ -5,0 +6,1 @@\n+  const items = useCartItems();" }]
+  },
+  {
+    "name": "py-def-signature-vs-call",
+    "expected": true,
+    "a": [{ "file": "billing/invoice.py", "patch": "@@ -20,1 +20,1 @@\n-def render_invoice(order):\n+def render_invoice(order, locale):" }],
+    "b": [{ "file": "billing/email.py", "patch": "@@ -44,0 +45,1 @@\n+    html = render_invoice(order)" }]
+  },
+  {
+    "name": "py-class-rename-vs-instantiation",
+    "expected": true,
+    "a": [{ "file": "core/cache.py", "patch": "@@ -5,1 +5,1 @@\n-class RedisCache:\n+class KeyValueCache:" }],
+    "b": [{ "file": "core/session.py", "patch": "@@ -12,0 +13,1 @@\n+        self.cache = RedisCache(url)" }]
+  },
+  {
+    "name": "go-func-rename-vs-call",
+    "expected": true,
+    "a": [{ "file": "internal/store/store.go", "patch": "@@ -30,1 +30,1 @@\n-func OpenStore(dsn string) (*Store, error) {\n+func NewStore(dsn string) (*Store, error) {" }],
+    "b": [{ "file": "cmd/api/main.go", "patch": "@@ -18,0 +19,1 @@\n+\ts, err := store.OpenStore(cfg.DSN)" }]
+  },
+  {
+    "name": "rust-fn-signature-vs-call",
+    "expected": true,
+    "a": [{ "file": "src/parser.rs", "patch": "@@ -40,1 +40,1 @@\n-pub fn parse_header(input: &str) -> Header {\n+pub fn parse_header(input: &str, strict: bool) -> Result<Header> {" }],
+    "b": [{ "file": "src/server.rs", "patch": "@@ -77,0 +78,1 @@\n+    let h = parse_header(&line);" }]
+  },
+  {
+    "name": "java-method-rename-vs-call",
+    "expected": true,
+    "a": [{ "file": "src/main/java/app/OrderService.java", "patch": "@@ -25,1 +25,1 @@\n-    public Order placeOrder(Cart cart) {\n+    public Order submitOrder(Cart cart) {" }],
+    "b": [{ "file": "src/main/java/app/CheckoutController.java", "patch": "@@ -31,0 +32,1 @@\n+        Order o = orderService.placeOrder(cart);" }]
+  },
+  {
+    "name": "ruby-method-removed-vs-call",
+    "expected": true,
+    "a": [{ "file": "app/models/user.rb", "patch": "@@ -14,3 +14,0 @@\n-  def display_name\n-    \"#{first} #{last}\"\n-  end" }],
+    "b": [{ "file": "app/views/helpers.rb", "patch": "@@ -6,0 +7,1 @@\n+    link_to user.display_name, user" }]
+  },
+  {
+    "name": "ts-body-only-change",
+    "expected": false,
+    "a": [{ "file": "src/users/repo.ts", "patch": "@@ -13,1 +13,1 @@ export async function loadUser(id: string) {\n-  return db.users.get(id);\n+  return db.users.get(id) ?? null;" }],
+    "b": [{ "file": "src/routes/profile.ts", "patch": "@@ -20,0 +21,1 @@\n+  const user = await loadUser(id);" }]
+  },
+  {
+    "name": "ts-added-new-function-only",
+    "expected": false,
+    "a": [{ "file": "src/lib/math.ts", "patch": "@@ -30,0 +31,3 @@\n+export function clamp(n: number, lo: number, hi: number) {\n+  return Math.min(hi, Math.max(lo, n));\n+}" }],
+    "b": [{ "file": "src/ui/slider.tsx", "patch": "@@ -9,0 +10,1 @@\n+  const v = clamp(raw, 0, 100);" }]
+  },
+  {
+    "name": "ts-reference-only-in-comment",
+    "expected": false,
+    "a": [{ "file": "src/lib/legacy.ts", "patch": "@@ -10,1 +10,1 @@\n-export function legacyHash(s: string) {\n+export function stableHash(s: string) {" }],
+    "b": [{ "file": "src/auth/token.ts", "patch": "@@ -3,0 +4,1 @@\n+// TODO: drop legacyHash once the migration lands" }]
+  },
+  {
+    "name": "ts-reference-only-in-string",
+    "expected": false,
+    "a": [{ "file": "src/lib/flags.ts", "patch": "@@ -2,1 +2,1 @@\n-export function isBetaUser(u: User) {\n+export function isPreviewUser(u: User) {" }],
+    "b": [{ "file": "src/analytics/events.ts", "patch": "@@ -4,0 +5,1 @@\n+track('isBetaUser checked');" }]
+  },
+  {
+    "name": "unrelated-names",
+    "expected": false,
+    "a": [{ "file": "src/lib/date.ts", "patch": "@@ -1,1 +1,1 @@\n-export function toISO(d: Date) {\n+export function toIsoString(d: Date) {" }],
+    "b": [{ "file": "src/cart/total.tsx", "patch": "@@ -30,0 +31,1 @@\n+  const sum = items.reduce((s, i) => s + i.price, 0);" }]
+  },
+  {
+    "name": "both-prs-rename-same-symbol",
+    "expected": false,
+    "a": [{ "file": "src/users/repo.ts", "patch": "@@ -12,1 +12,1 @@\n-export async function loadUser(id: string) {\n+export async function findUser(id: string) {" }],
+    "b": [{ "file": "src/users/repo.ts", "patch": "@@ -12,1 +12,1 @@\n-export async function loadUser(id: string) {\n+export async function getUser(id: string) {" }, { "file": "src/routes/x.ts", "patch": "@@ -1,0 +2,1 @@\n+loadUser(id)" }]
+  },
+  {
+    "name": "py-whitespace-only-def-change",
+    "expected": false,
+    "a": [{ "file": "billing/invoice.py", "patch": "@@ -20,1 +20,1 @@\n-def render_invoice(order):\n+def  render_invoice(order):" }],
+    "b": [{ "file": "billing/email.py", "patch": "@@ -44,0 +45,1 @@\n+    html = render_invoice(order)" }]
+  },
+  {
+    "name": "unsupported-language",
+    "expected": false,
+    "a": [{ "file": "docs/guide.md", "patch": "@@ -1,1 +1,1 @@\n-## Install\n+## Installation" }],
+    "b": [{ "file": "README.md", "patch": "@@ -3,0 +4,1 @@\n+See Install in the guide." }]
+  },
+  {
+    "name": "css-only-changes",
+    "expected": false,
+    "a": [{ "file": "styles/button.css", "patch": "@@ -3,1 +3,1 @@\n-.btn-primary { color: blue; }\n+.button-primary { color: blue; }" }],
+    "b": [{ "file": "src/Button.tsx", "patch": "@@ -5,0 +6,1 @@\n+  return <button className=\"btn-primary\">{children}</button>;" }]
+  },
+  {
+    "name": "ts-common-word-stoplisted",
+    "expected": false,
+    "a": [{ "file": "src/lib/index.ts", "patch": "@@ -1,1 +1,1 @@\n-export function init() {\n+export function initialize() {" }],
+    "b": [{ "file": "src/main.ts", "patch": "@@ -2,0 +3,1 @@\n+app.init();" }]
+  },
+  {
+    "name": "kotlin-fun-rename-vs-call",
+    "expected": true,
+    "a": [{ "file": "app/src/main/kotlin/Repo.kt", "patch": "@@ -8,1 +8,1 @@\n-    suspend fun fetchFeed(page: Int): Feed {\n+    suspend fun loadFeed(page: Int): Feed {" }],
+    "b": [{ "file": "app/src/main/kotlin/FeedViewModel.kt", "patch": "@@ -15,0 +16,1 @@\n+        val feed = repo.fetchFeed(1)" }]
+  }
+]

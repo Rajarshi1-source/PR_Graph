@@ -6,6 +6,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // output: 'standalone',   // intentionally omitted — incompatible with the custom server
   // reactCompiler: true,    // optional (stable in 16, off by default; adds build time)
+  // Defence in depth for the AVIF image-optimizer RCE (fixed in 16.3.3+): never transcode to AVIF.
+  images: { formats: ["image/webp"] },
   outputFileTracingIncludes: {
     "/api/**": ["./prisma/**"],
   },

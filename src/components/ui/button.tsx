@@ -1,3 +1,4 @@
+import { cloneElement, isValidElement, type ReactElement } from "react"
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
 import { cva, type VariantProps } from "class-variance-authority"
 
@@ -44,14 +45,36 @@ function Button({
   className,
   variant = "default",
   size = "default",
+  nativeButton,
+  render,
+  children,
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+  const classes = cn(buttonVariants({ variant, size, className: typeof className === "string" ? className : undefined }))
+  // A link styled as a button (`render={<a/>}` / `render={<Link/>}`) must stay a link for
+  // assistive tech: render the element itself instead of a Base UI button with role="button".
+  if (isValidElement(render) && render.type !== "button") {
+    const el = render as ReactElement<Record<string, unknown>>
+    return cloneElement(
+      el,
+      {
+        ...(props as Record<string, unknown>),
+        "data-slot": "button",
+        className: cn(classes, el.props.className as string | undefined),
+      },
+      children as React.ReactNode,
+    )
+  }
   return (
     <ButtonPrimitive
       data-slot="button"
-      className={cn(buttonVariants({ variant, size, className }))}
+      nativeButton={nativeButton}
+      render={render}
+      className={classes}
       {...props}
-    />
+    >
+      {children}
+    </ButtonPrimitive>
   )
 }
 

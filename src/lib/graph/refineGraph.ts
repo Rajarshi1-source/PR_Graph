@@ -1,72 +1,57 @@
-import type { DependencyGraph, GraphEdge, GraphNode, NodeStatus } from "./types";
+import type { DependencyGraph, GraphEdge, VerdictOrigin } from "./types";
 import type { ConflictVerdict } from "@/lib/ai/types";
-import { topologicalSort } from "./topologicalSort";
-import { detectCycles } from "./cycleDetection";
+import { deriveGraph } from "./derive";
+
+export type RefineVerdict = ConflictVerdict & { source?: VerdictOrigin };
 
 /**
- * Pure AI-refinement stage (Phase 2). Given the deterministic graph and a per-edge verdict map,
- * annotate each overlapping edge with its semantic verdict, demote CO_LOCATED edges to
- * non-blocking, then re-derive everything that depends on the blocking subgraph (in-degree,
- * cycles, node status, merge order, stats).
- *
- * No I/O, no Date.now, no randomness — same graph + same verdicts ⇒ same refined graph, so the
- * demotion logic is trivially unit-testable. A CO_LOCATED demotion can flip a node BLOCKED→SAFE
- * and can break a deadlock cycle.
+ * Pure AI-refinement stage. Rules (prgraph-graph-ai §Layer 2):
+ *   - every analysed edge is annotated (verdict, confidence, explanation, resolution, origin);
+ *   - only APPROXIMATE blocking evidence may be demoted: CO_LOCATED → non-blocking CO_LOCATED edge;
+ *   - exact textual conflicts and stacks are facts — annotated, never demoted;
+ *   - the AI never adds a blocking edge: TRUE_CONFLICT on a TOUCHES edge stays non-blocking (the
+ *     target shows AT_RISK with the explanation).
+ * Then status / cycles / merge order / stats are re-derived. Same inputs ⇒ same output.
  */
 export function refineGraph(
   graph: DependencyGraph,
-  verdicts: Map<string, ConflictVerdict>,
+  verdicts: Map<string, RefineVerdict>,
 ): DependencyGraph {
-  // 1. annotate + demote (new edge objects — never mutate the input)
-  const edges: GraphEdge[] = graph.edges.map((e) => {
-    const v = verdicts.get(e.id);
-    if (!v) return { ...e };
-    const refined: GraphEdge = {
-      ...e,
-      semanticVerdict: v.verdict,
-      explanation: v.explanation,
-    };
-    if (v.verdict === "CO_LOCATED") refined.type = "CO_LOCATED";
-    return refined;
-  });
+  const edges: GraphEdge[] = graph.edges
+    .filter((e) => e.type !== "INDIRECT")
+    .map((e) => {
+      const v = verdicts.get(e.id);
+      if (!v) return { ...e };
+      const refined: GraphEdge = {
+        ...e,
+        semanticVerdict: v.verdict,
+        explanation: v.explanation,
+        confidence: v.confidence,
+        ...(v.resolution ? { resolution: v.resolution } : {}),
+        ...(v.source ? { verdictOrigin: v.source } : {}),
+      };
+      if (canDemote(e) && v.verdict === "CO_LOCATED") {
+        refined.type = "CO_LOCATED";
+        refined.blocking = false;
+        refined.severity = "low";
+      }
+      return refined;
+    });
 
-  // 2. blocking subgraph = everything except demoted CO_LOCATED edges
-  const blocking = edges.filter((e) => e.type !== "CO_LOCATED");
-  const nodeIds = graph.nodes.map((n) => n.id);
+  return deriveGraph(graph.nodes, edges, graph.mergePlan);
+}
 
-  // 3. re-derive cycles + in-degree → status over the blocking subgraph
-  const cycles = detectCycles(nodeIds, blocking);
-  const inCycle = new Set(cycles.flat());
-  const incoming = new Map<string, number>(nodeIds.map((id) => [id, 0]));
-  for (const e of blocking) incoming.set(e.target, (incoming.get(e.target) ?? 0) + 1);
+/** Only approximate blocking evidence (no patch, base drift, regex symbol match) may be demoted. */
+export function canDemote(e: GraphEdge): boolean {
+  return e.blocking && e.certainty === "approx" && (e.type === "BLOCKS" || e.type === "SEMANTIC");
+}
 
-  const classify = (id: string): NodeStatus =>
-    inCycle.has(id) ? "DEADLOCKED" : (incoming.get(id) ?? 0) === 0 ? "SAFE" : "BLOCKED";
-
-  const nodes: GraphNode[] = graph.nodes.map((n) => ({
-    ...n,
-    data: {
-      ...n.data,
-      status: classify(n.id),
-      blockedBy: blocking.filter((e) => e.target === n.id).map((e) => e.source),
-      blocking: blocking.filter((e) => e.source === n.id).map((e) => e.target),
-    },
-  }));
-
-  // 4. merge order over the blocking subgraph
-  const mergeOrder = topologicalSort(nodes, blocking);
-
-  return {
-    nodes,
-    edges,
-    mergeOrder,
-    cycles,
-    stats: {
-      totalPRs: nodes.length,
-      safePRs: nodes.filter((n) => n.data.status === "SAFE").length,
-      blockedPRs: nodes.filter((n) => n.data.status === "BLOCKED").length,
-      deadlockedPRs: nodes.filter((n) => n.data.status === "DEADLOCKED").length,
-      totalDependencies: edges.length,
-    },
-  };
+/** Edges worth sending to the analyzer: anything with shared files or symbol links. */
+export function analyzableEdges(graph: DependencyGraph): GraphEdge[] {
+  return graph.edges.filter(
+    (e) =>
+      e.type !== "INDIRECT" &&
+      e.type !== "STACKED" &&
+      (e.sharedFiles.length > 0 || (e.symbols?.length ?? 0) > 0),
+  );
 }

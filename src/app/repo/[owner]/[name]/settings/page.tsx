@@ -4,6 +4,8 @@ import { notFound, redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SlackSettings } from "@/components/slack/SlackSettings";
+import { IntegrationSettings, ApiTokenSettings } from "@/components/settings/IntegrationSettings";
+import { env } from "@/lib/env";
 import { Button } from "@/components/ui/button";
 import { getServerSession } from "@/lib/auth/serverSession";
 import { prisma } from "@/lib/db/prisma";
@@ -40,7 +42,11 @@ export default async function RepoSettingsPage({ params }: { params: Params }) {
         </Button>
         <h1 className="mb-1 text-2xl font-semibold">Settings</h1>
         <p className="text-muted-foreground mb-6 text-sm">{repo.fullName}</p>
-        <SlackSettings repoId={repo.id} />
+        <div className="space-y-6">
+          <IntegrationSettings repoId={repo.id} />
+          <ApiTokenSettings repoId={repo.id} fullName={repo.fullName} appUrl={env.APP_URL} />
+          <SlackSettings repoId={repo.id} />
+        </div>
       </main>
     </>
   );

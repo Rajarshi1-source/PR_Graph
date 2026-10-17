@@ -19,9 +19,10 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 export default async function RepoGraphPage({ params }: { params: Params }) {
   const { owner, name } = await params;
 
-  if (!(await getServerSession())) redirect("/login");
+  const session = await getServerSession();
+  if (!session) redirect("/login");
 
-  const result = await getInitialGraph(owner, name);
+  const result = await getInitialGraph(owner, name, session.userId);
   if (!result) notFound();
 
   return (
@@ -33,6 +34,7 @@ export default async function RepoGraphPage({ params }: { params: Params }) {
             repoId={result.repoId}
             fullName={`${owner}/${name}`}
             initialGraph={result.graph}
+            lastSyncAt={result.lastSyncAt}
           />
         </div>
       </main>

@@ -5,10 +5,14 @@ description: >-
   Use for ANY backend work: API Route Handlers under app/api, GitHub App OAuth plus the webhook
   receiver (HMAC-SHA256 verify, idempotent delivery dedup), the Octokit GitHub service (paginated
   PR/file fetch, ETags, rate-limit governor), the Redis Streams webhook queue and consumer worker, the
-  Socket.IO custom server, the Slack Bolt notifier, Prisma data access, resilience (timeouts,
-  retry/backoff, circuit breaker, DLQ), config, errors, or backend tests. Trigger on route handler,
-  app/api, async params, webhook, Octokit, GitHub App, Redis Streams, Socket.IO, custom server,
-  Turbopack, proxy.ts, Slack Bolt, Prisma, circuit breaker, rate limit, or background worker.
+  Socket.IO custom server, the Slack notifier (@slack/web-api), Prisma data access, resilience
+  (timeouts, retry/backoff, circuit breaker, DLQ), config, errors, or backend tests — plus the Phase-3
+  differentiator wiring: recompute coalescing, deep merge-simulation blob fetches, the GraphQL
+  readiness fetch, the readiness fast path, the Check Run bot, API tokens, the agent preflight API,
+  repo settings, PROCESS_ROLE, and the public /demo data path. Trigger on route handler, app/api,
+  async params, webhook, Octokit, GitHub App, GraphQL, check run, checks API, preflight, API token,
+  MCP, Redis Streams, Socket.IO, custom server, Turbopack, proxy.ts, Slack, Prisma, circuit breaker,
+  rate limit, or background worker.
   MANDATE: Node.js 24 LTS plus Next.js 16 App Router plus TypeScript strict — Node 20 hit
   end-of-life in April 2026 (target Node 24), and Next.js 14 is end-of-life (target 16). Route-handler
   `params` are async Promises in Next.js 16 and must be awaited. For auth, secrets, and the full
@@ -70,7 +74,7 @@ app/api/**/route.ts   → HTTP only: Zod validate, status codes, ProblemDetail e
         ↓
 lib/<domain>/*.ts      → services: business logic, orchestration, resilience boundaries
         ↓
-lib/db (Prisma)  +  lib/github (Octokit)  +  lib/cache (Redis)  +  lib/slack (Bolt)
+lib/db (Prisma)  +  lib/github (Octokit)  +  lib/cache (Redis)  +  lib/slack (@slack/web-api)
         ↓
 PostgreSQL              external GitHub API       Redis (cache/streams)   Slack
 ```
@@ -350,6 +354,82 @@ const Env = z.object({
 export const env = Env.parse(process.env);   // fail fast on misconfig
 ```
 
+## Phase 3 — differentiator wiring (the engine computes, the backend fetches)
+
+All graph/planning logic is pure (prgraph-graph-ai). The backend's job is to fetch the right GitHub
+data cheaply, call the pure functions, persist, push, and publish — idempotently.
+
+### Recompute coalescing (no lost webhooks)
+
+`recomputeGraph` holds `graph:lock:{repoId}` (`SET NX EX 60`). If the lock is busy, **set
+`graph:dirty:{repoId}`** and return — never silently drop the event. The lock holder loops
+`while (await redis.getdel(dirtyKey))` re-running the recompute (extending the lock each pass) before
+releasing. Two webhooks during one recompute ⇒ exactly one extra rerun.
+
+### GitHub data surface (all through `fireGithub` breaker → retry → timeout)
+
+| Need | Call | Cache |
+|---|---|---|
+| open PRs (+ `head.sha`, `base.sha`, `head.ref`, `base.ref`, `draft`) | `pulls.list` (ETag) | 120 s |
+| files + `patch` | `pulls.listFiles` (paginate) | 300 s, invalidated per webhook PR |
+| merge base (deep verify) | `repos.compareCommits(base...head)` → `merge_base_commit.sha` | forever, keyed by head SHA |
+| file blob at a SHA (deep verify) | `repos.getContent({ path, ref })` (skip > 1 MB / binary) | forever, keyed by `(path, sha)` — immutable |
+| readiness for ALL open PRs | **one paginated GraphQL query** (`headRefOid`, `isDraft`, `mergeable`, `reviewDecision`, last commit `statusCheckRollup { state contexts }`) | keyed by repo + sorted head SHAs |
+| branch rules | `GET /repos/{o}/{r}/rules/branches/{branch}` (metadata permission only) | 10 min |
+| Check Run write | `checks.create` / `checks.update` | n/a (DB-tracked) |
+
+Deep verify is bounded: `MERGE_SIM_DEEP` (default on), `MERGE_SIM_MAX_PAIRS` (default 20) per
+recompute, concurrency 4. Any failure leaves the edge `approx` + blocking — never fails the recompute.
+
+### Webhook events → jobs
+
+| Event | Job |
+|---|---|
+| `pull_request` (any action) | full recompute (`changedPrNumber` refetched fresh) |
+| `pull_request_review`, `check_suite`, `check_run` (completed/created), `status` | **readiness fast path**: refetch GraphQL readiness, re-run `planMerges`, push `graph:updated` — edges untouched |
+| `check_run.requested_action` (identifier `recompute`) | full recompute for that repo |
+| `installation`, `installation_repositories` | provisioning (unchanged) |
+
+### Check Run bot (`lib/bot/publishChecks.ts`, opt-in per repo: `settings.botEnabled`)
+
+- After each recompute/readiness update, for every open PR: `renderCheckSummary(node, graph, plan)`
+  (pure markdown) → `sha256(summary + conclusion)`. Compare with the `CheckRun` row
+  `@@unique([repoId, prNumber, headSha])`; **write only if the hash changed** (protects GitHub's
+  secondary rate limits; idempotent across retries/replicas). `create` for a new head SHA, `update`
+  otherwise. Concurrency 4 behind the GitHub breaker.
+- Name `PRGraph`. Conclusion: `success` when SAFE, `neutral` by default, `failure` only when the repo
+  sets `failOnConflict` and the PR is BLOCKED/DEADLOCKED (then it can be a required check). Include an
+  `actions: [{ label: 'Re-check', identifier: 'recompute' }]` button.
+
+### API tokens + agent preflight API
+
+- `ApiToken` rows store **only `sha256(token)`** + an 8-char display `prefix`; the token
+  (`prg_` + 32 base62 chars from `crypto.randomBytes`) is shown **once** at creation. Scopes:
+  `preflight:read`, `graph:read`. Bound to one repo; revocable; optional expiry; `lastUsedAt` updated
+  best-effort.
+- `lib/auth/apiToken.ts` → `requireApiToken(req, scope)` parses `Authorization: Bearer prg_…`,
+  constant-time-safe lookup by hash, checks scope/revocation/expiry → 401/403 ProblemDetail.
+- Per-token Redis fixed window (`rl:tok:{id}:{minute}`, 60/min) → `problem(429)` with `Retry-After`.
+- `POST /api/v1/preflight` — Zod body `{ repo, patch? (≤1 MB) | files?, baseSha? }`; the service
+  loads stored PR facts (`PRFile.patch`, refs, head SHAs) from Postgres and calls the pure
+  `preflight()`; never calls GitHub on the request path.
+- The MCP server (`packages/prgraph-mcp`) is a thin client of these endpoints — no server-side state.
+
+### Repo settings
+
+`Repository.settings` (JSONB) validated by `lib/repos/settings.ts` (Zod, defaults applied on read):
+`{ botEnabled=false, failOnConflict=false, aiEnabled=true, ignoreGlobs=[], workspaceGlobs=[] }`.
+`PATCH /api/repos/[repoId]/settings` (owner only). `aiEnabled` can only turn AI **off** for a repo.
+
+### Process roles + demo
+
+- `PROCESS_ROLE=all|web|worker` (default `all`): `web` serves Next + Socket.IO only; `worker` runs
+  the stream consumer + reconcile only (still emits via the Socket.IO Redis adapter/emitter);
+  `all` = both (dev, single-box deploys). See SCALING.md §2.
+- `/demo` + `POST /api/demo/preflight` use static fixtures (`lib/demo/fixtures.ts`) and pure
+  functions only — no DB, Redis, or GitHub. Gated by `DEMO_ENABLED` (default true outside
+  production).
+
 ## Reference — security & the full contract
 
 **For anything touching auth, secrets, PII, or designing/changing an endpoint** — the GitHub App
@@ -391,6 +471,18 @@ prgraph-graph-ai. Use `node:test` or Vitest — both fine on Node 24.
 | Scattered `process.env.X` reads | one Zod-validated `env` object at boot |
 | Ad-hoc `{ error: '...' }` responses | RFC 9457 `problem()` helper |
 | No dedupe on webhook deliveries | `SET NX` on `X-GitHub-Delivery` |
+| Returning early when the recompute lock is held (event lost) | set `graph:dirty:{repoId}`; the lock holder re-runs |
+| Full recompute on a CI/review webhook | readiness fast path (GraphQL refetch + `planMerges`) |
+| N REST calls per PR for checks/reviews | one paginated GraphQL readiness query per repo |
+| Re-posting a Check Run on every recompute | content-hash the summary; write only on change |
+| Storing API tokens in plaintext | store `sha256(token)` + prefix; show the token once |
+| Calling GitHub on the preflight request path | preflight reads stored PR facts from Postgres |
+
+## Scaling notes
+
+Webhook ingestion, recompute workers, the realtime gateway, AI workers and the bot publisher are
+separate roles of one image at scale (partitioned streams by `hash(repoId)`, per-installation token
+buckets, sharded Socket.IO pub/sub). See [`SCALING.md`](../../../SCALING.md).
 
 ## Quick reference
 

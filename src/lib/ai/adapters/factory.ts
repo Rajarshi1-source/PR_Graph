@@ -1,5 +1,7 @@
 import { env } from "@/lib/env";
 import { OpenAIAdapter } from "./openai";
+import { AnthropicAdapter } from "./anthropic";
+import { OllamaAdapter } from "./ollama";
 import type { LLMAdapter } from "./types";
 
 /**
@@ -13,8 +15,12 @@ export function makeAdapter(spec: string = env.LLM_PROVIDER): LLMAdapter {
   switch (vendor) {
     case "openai":
       return new OpenAIAdapter(model);
-    // case "anthropic": return new AnthropicAdapter(model); // same interface, A/B on the eval
-    // case "ollama":    return new OllamaAdapter(model);     // local, zero per-call cost
+    case "anthropic":
+      if (!model) throw new Error("LLM_PROVIDER anthropic needs a model id: anthropic:<model>");
+      return new AnthropicAdapter(model);
+    case "ollama":
+      if (!model) throw new Error("LLM_PROVIDER ollama needs a model: ollama:<model>");
+      return new OllamaAdapter(model);
     default:
       throw new Error(`Unknown LLM_PROVIDER: ${spec}`);
   }

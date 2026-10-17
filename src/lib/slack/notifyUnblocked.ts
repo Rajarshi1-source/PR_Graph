@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import type { GraphDiff } from "@/lib/graph/diffGraphs";
+import type { DependencyGraph } from "@/lib/graph/types";
 import { open } from "@/lib/crypto/secretbox";
 import { postMessage } from "./client";
 import { buildUnblockedMessage } from "./formatMessage";
@@ -12,6 +13,7 @@ export async function notifyUnblocked(
   repoId: number,
   fullName: string,
   diff: GraphDiff,
+  graph?: DependencyGraph,
 ): Promise<void> {
   if (diff.newlyUnblocked.length === 0 && diff.removed.length === 0) return;
 
@@ -20,7 +22,7 @@ export async function notifyUnblocked(
     if (!config || !config.isActive || !config.notifyOnUnblock) return;
 
     const token = open(config.botToken);
-    const message = buildUnblockedMessage({ fullName, diff });
+    const message = buildUnblockedMessage({ fullName, diff, graph });
     await postMessage(token, config.channelId, message);
   } catch (err) {
     console.warn("[slack] notifyUnblocked failed (non-fatal):", err);

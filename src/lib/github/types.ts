@@ -18,6 +18,8 @@ export interface RawPR {
   draft?: boolean;
   labels?: { name: string }[];
   requested_reviewers?: { login: string }[] | null;
+  head?: { sha: string; ref: string };
+  base?: { sha: string; ref: string };
 }
 
 /** Minimal shape we read from `pulls.listFiles` (includes the unified-diff `patch`). */
@@ -27,4 +29,5 @@ export interface RawPRFile {
   additions: number;
   deletions: number;
   patch?: string;
+  previous_filename?: string;
 }

@@ -14,13 +14,20 @@ export interface GraphDiff {
   /** Node ids present in prev but not next (merged/closed PRs). */
   removed: string[];
   statusChanges: StatusChange[];
-  /** PRs that became SAFE (were BLOCKED/DEADLOCKED before) — the headline for Slack. */
+  /** PRs that left BLOCKED/DEADLOCKED for SAFE/AT_RISK — the headline for Slack. */
   newlyUnblocked: StatusChange[];
 }
 
+const HELD: ReadonlySet<NodeStatus> = new Set<NodeStatus>(["BLOCKED", "DEADLOCKED"]);
+
+/** True when a status transition means "this PR can now be merged". */
+export function isUnblock(from: NodeStatus, to: NodeStatus): boolean {
+  return HELD.has(from) && !HELD.has(to);
+}
+
 /**
- * Compare two graph snapshots and report the transitions. Pure — used by the recompute
- * worker to drive Socket.IO animations and the Slack "now safe to merge" notification.
+ * Compare two graph snapshots and report the transitions. Pure — drives Socket.IO animations, the
+ * Slack "now unblocked" notification, the history view and what-if simulation.
  */
 export function diffGraphs(prev: DependencyGraph | null, next: DependencyGraph): GraphDiff {
   const prevNodes = new Map((prev?.nodes ?? []).map((n) => [n.id, n]));
@@ -47,7 +54,7 @@ export function diffGraphs(prev: DependencyGraph | null, next: DependencyGraph):
         to: after,
       };
       statusChanges.push(change);
-      if (after === "SAFE" && before !== "SAFE") newlyUnblocked.push(change);
+      if (isUnblock(before, after)) newlyUnblocked.push(change);
     }
   }
 

@@ -13,6 +13,10 @@ const eslintConfig = defineConfig([
     "build/**",
     "dist/**",
     "next-env.d.ts",
+    // Standalone package with its own toolchain (lint/typecheck/test run inside it).
+    "packages/**",
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 
