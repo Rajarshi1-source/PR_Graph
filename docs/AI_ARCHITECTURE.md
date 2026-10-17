@@ -51,7 +51,7 @@ key is configured.
 | Eval | Grades | Fixtures | Gate |
 |---|---|---|---|
 | `npm run eval` | the shipping `analyzeConflict` (heuristic when AI is off) | `evals/labeled-pairs.json` (36) | F1 ≥ 0.60 offline / ≥ 0.80 with AI, ≤ 5 pt regression vs `evals/baseline.json` |
-| `npm run eval:impact` | the cross-file symbol detector (`impactLinks`) | `evals/impact-pairs.json` (22) | F1 ≥ 0.75, ≤ 5 pt regression vs `evals/impact-baseline.json` |
+| `npm run eval:impact` | the cross-file symbol detector (`impactLinks`) | `evals/impact-pairs.json` (22 synthetic) + `evals/impact-real-pairs.json` (111 real commit pairs: 62 dev, 49 holdout) | per set: F1 ≥ 0.75 synthetic / ≥ 0.50 real, ≤ 5 pt regression vs `evals/impact-baseline.json` |
 
 Flags for experiments: `--provider <vendor:model>` and `--prompt <version>` (e.g.
 `AI_ENABLED=true npm run eval -- --provider anthropic:<model> --prompt conflict.v3`). The provider is
@@ -65,14 +65,26 @@ Only numbers actually produced in this repository are recorded here.
 |---|---|---|---|---|---|---|
 | Heuristic, Phase 2 (`+` ranges, files mixed) | conflict (36) | 0.857 | 0.857 | 0.857 | 0.889 | previous baseline, 2026-06-21 |
 | Heuristic, Phase 3 (base-coordinate, per file, + symbol impact) | conflict (36) | 0.929 | 0.929 | 0.929 | 0.944 | current `evals/baseline.json` |
-| `impactLinks` (deterministic) | impact (22) | 1.000 | 1.000 | 1.000 | 1.000 | see caveat below |
+| `impactLinks`, Phase 3 (name match) | impact synthetic (22) | 1.000 | 1.000 | 1.000 | 1.000 | written alongside the detector |
+| `impactLinks`, Phase 3 (name match) | impact real, holdout (49) | 0.267 | 0.889 | 0.410 | — | 22 false positives |
+| `impactLinks`, revised (shapes, reach, lexing) | impact synthetic (22) | 1.000 | 1.000 | 1.000 | 1.000 | current `evals/impact-baseline.json` |
+| `impactLinks`, revised | impact real, dev (62) | 0.667 | 1.000 | 0.800 | 0.903 | tuned on: was P 0.273 / F1 0.429 |
+| `impactLinks`, revised | **impact real, holdout (49)** | **0.571** | **0.889** | **0.696** | 0.857 | not tuned on: the number to quote |
 | `openai:gpt-5.4-mini` · `conflict.v4` | conflict (36) | not run | — | — | — | needs `OPENAI_API_KEY`; CI's `eval-ai` job runs it when the secret exists |
 | `anthropic:<model>` · `conflict.v4` | conflict (36) | not run | — | — | — | needs `ANTHROPIC_API_KEY` |
 | `ollama:<model>` · `conflict.v4` | conflict (36) | not run | — | — | — | needs a local Ollama |
 
-**Caveats.** The impact fixtures were written alongside the detector, so the 1.000 shows that the
-labeled behaviours are implemented and protected against regressions — not that the detector
-generalises. Growing that set with pairs from real repositories is the next step before quoting it.
+**Caveats.** The synthetic impact fixtures were written alongside the detector, so their 1.000 shows
+only that each labelled behaviour is implemented and guarded. The real set
+([`evals/README.md`](../evals/README.md)) is the honest measure. On real history, matching names
+alone flagged about three non-breaking pairs for every real break. Most came from new optional
+parameters, widened types, references inside doc comments, docstrings or help text, private
+helpers, and same-named methods on other types. The revised detector compares parameter shapes,
+visibility and reach, and lexes comments and strings. On the holdout set that cuts false positives
+from 22 to 6 with the same recall. What remains is mostly homonyms (`has`, `Name`, `Result` on a
+different type) that need type information the regex layer does not have. SEMANTIC edges stay
+`certainty: "approx"`, so the AI layer may demote them. With 9 holdout positives, one fixture moves
+recall by 11 points.
 The two heuristic misses on the conflict set are instructive: `adjacent-overlap` (two insertions two
 lines apart in the same function — merges cleanly, but the label says the change is semantically
 coupled) and `reformat-vs-edit-overlap` (adjacent edits that git *does* conflict on, labeled

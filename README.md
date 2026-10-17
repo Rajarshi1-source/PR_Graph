@@ -131,7 +131,7 @@ Create a GitHub App (Settings → Developer settings → GitHub Apps) with:
 | `npm run eval` | AI semantic-conflict eval harness — grades the shipping analyzer |
 | `npm run eval:baseline` | Write `evals/baseline.json` from the current run |
 | `npm run eval:ci` | Eval in CI mode (fail on F1 below threshold or >5pt regression) |
-| `npm run eval:impact` / `eval:impact:ci` | Cross-file symbol-impact eval (F1 ≥ 0.75 gate) |
+| `npm run eval:impact` / `eval:impact:ci` | Cross-file symbol-impact eval: synthetic + 111 real commit pairs from 8 OSS repos (see `evals/README.md`) |
 
 ## Docker
 

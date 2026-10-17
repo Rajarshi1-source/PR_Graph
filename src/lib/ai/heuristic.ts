@@ -84,7 +84,7 @@ function symbolClash(
   const userDefs = new Set(userFacts.flatMap((f) => [...f.defs.keys()]));
   for (const f of facts(definerFiles)) {
     for (const [name, change] of f.defs) {
-      if (change === "added" || userDefs.has(name)) continue;
+      if (change === "added" || change === "compatible" || userDefs.has(name)) continue;
       if (refs.has(name)) return { name, change, swapped };
     }
   }
